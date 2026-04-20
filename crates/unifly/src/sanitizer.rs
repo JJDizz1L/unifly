@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use regex::Regex;
 
 use unifly_api::model::{AclRule, FirewallPolicy, FirewallZone, NatPolicy, WifiBroadcast};
+use unifly_api::session::models::RogueAp;
 use unifly_api::{Client, Device, Event, HealthSummary, MacAddress, Network};
 
 use crate::config::DemoConfig;
@@ -364,6 +365,51 @@ impl Sanitizer {
         p.src_address = p.src_address.as_ref().map(|a| self.sanitize_text(a));
         p.translated_address = p.translated_address.as_ref().map(|a| self.sanitize_text(a));
         p
+    }
+
+    pub fn sanitize_rogue_ap(&self, ap: &RogueAp) -> RogueAp {
+        let mut r = ap.clone();
+        if self.redact_ssids {
+            r.essid = r.essid.as_ref().map(|s| self.sanitize_ssid(s));
+        }
+        if self.redact_macs {
+            let hash = simple_hash(&r.bssid);
+            let bytes = hash.to_le_bytes();
+            r.bssid = format!(
+                "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]
+            );
+            r.ap_mac = r.ap_mac.as_ref().map(|m| {
+                let h = simple_hash(m);
+                let b = h.to_le_bytes();
+                format!(
+                    "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    b[0], b[1], b[2], b[3], b[4]
+                )
+            });
+        }
+        r
+    }
+
+    pub fn sanitize_rogue_aps(&self, v: &[RogueAp]) -> Vec<RogueAp> {
+        v.iter().map(|ap| self.sanitize_rogue_ap(ap)).collect()
+    }
+
+    pub fn sanitize_json_value(&self, value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::String(s) => serde_json::Value::String(self.sanitize_text(s)),
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(|v| self.sanitize_json_value(v)).collect())
+            }
+            serde_json::Value::Object(map) => {
+                let mut out = serde_json::Map::new();
+                for (k, v) in map {
+                    out.insert(k.clone(), self.sanitize_json_value(v));
+                }
+                serde_json::Value::Object(out)
+            }
+            other => other.clone(),
+        }
     }
 
     // ── Collection wrappers (for data bridge) ──────────────────────
