@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Switch port management as code**: `devices ports`, `devices ports-export`,
+  and `devices port-set` cover the full per-port surface (mode, native VLAN,
+  tagged VLANs, PoE, speed). `port-set --from-file` accepts a JSONC payload
+  matching `ApplyPortsRequest` with splice semantics (ports omitted from the
+  file keep their existing override; per-port `"reset": true` clears one).
+  `ports-export` emits sparse JSONC by default and `--all` for first-time
+  bootstrapping. `--with-clients` annotates `ports` output with connected
+  clients, and `ports-export --with-clients` injects
+  `// last-seen <ISO8601>: <mac>` comments before each port for git-diff
+  drift detection on config-as-code repos.
+- **`Client::switch_port`** populated from the session-side `sw_port` and
+  merged onto integration-only clients via the hybrid join. `clients get`
+  detail view shows the wired port when present.
+- **`settings` top-level command**: `list / get <KEY> / set <KEY> / export`
+  for site-level Session API settings.
+- **Full VPN management surface**: `vpn site-to-site` CRUD; `vpn
+  remote-access` CRUD plus `suggest-port` and `download-config <id>`; `vpn
+  clients` CRUD; `vpn connections` list/get/restart for the legacy v2
+  connection inventory; `vpn peers` list/get/create/update/delete plus
+  `subnets`; `vpn magic-site-to-site` list/get; `vpn settings`
+  list/get/set/patch with `teleport`, `magic-site-to-site`, `openvpn`, and
+  `peer-to-peer` flag groups. Most write paths accept `--from-file` for
+  declarative config.
+- **TUI HyperChart widget** with tachyonfx-driven effects, an Octant Canvas
+  bandwidth chart with live legend on the Stats screen, a rank column on
+  ranked-bar lists, and a 160ms `fade_from_fg` transition between screens.
 - **`--after-system` on `firewall policies create`** to place a newly
   created policy after system-defined rules in one step (previously only
   available on `reorder`).
@@ -55,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Credential precedence reversed**: when both an explicit `api_key` (or
+  `password`) is set in a profile's TOML config and a corresponding keyring
+  entry exists, the explicit config value now wins. This is the opposite of
+  the older behavior and makes headless and shared-machine workflows
+  predictable. See PR #22.
 - Cloud auth now works end-to-end in CLI, TUI settings, and onboarding:
   `auth_mode = "cloud"` preserves `host_id`, `host_id_env`, `api_key_env`,
   defaults the controller URL to `https://api.ui.com`, and forces strict TLS

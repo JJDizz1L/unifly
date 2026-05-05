@@ -45,7 +45,7 @@ unifly alarms list --unarchived -p {{profile}} -o json | jq 'length'
 unifly clients list --all -p {{profile}} -o json | jq 'length'
 ```
 
-When `-p {{profile}}` is provided, prepend `-p -p {{profile}}` to all commands.
+When `-p {{profile}}` is provided, the `-p {{profile}}` flag is already wired into every command above; no further substitution is needed.
 
 ## Result Reporting
 

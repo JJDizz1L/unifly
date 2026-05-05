@@ -15,11 +15,14 @@ For end-user documentation see `README.md`. For contributor workflow see
 unifly is a Rust CLI and TUI for managing Ubiquiti UniFi network
 infrastructure. A single `unifly` binary ships three user-facing surfaces:
 
-- **CLI commands** (`unifly devices list`, etc.): 27 top-level commands
-  covering devices, clients, networks, WiFi, firewall, NAT, DNS, ACL,
-  traffic-lists, hotspot, events, stats, DPI, VPN, Wi-Fi observability
-  (neighbors, channels, roams, experience), cloud fleet queries, and a raw
-  `api` escape hatch.
+- **CLI commands** (`unifly devices list`, etc.): 28 top-level commands
+  (27 without the `tui` feature) covering devices and switch port management
+  (`ports / ports-export / port-set`), clients, networks, WiFi, firewall
+  (policies, zones, and groups), NAT, DNS, ACL, traffic-lists, hotspot,
+  events, stats, DPI, VPN (servers, tunnels, site-to-site, remote-access,
+  clients, connections, peers, magic-site-to-site, settings), Wi-Fi
+  observability (neighbors, channels, roams, experience), site settings
+  (`settings`), cloud fleet queries, and a raw `api` escape hatch.
 - **TUI dashboard** (`unifly tui`) -- 10-screen Ratatui interface for real-time
   monitoring and interactive management.
 - **Agent skill** at `skills/unifly/SKILL.md`: bundled documentation that
@@ -214,7 +217,7 @@ crates/unifly/src/cli/
   args.rs                    # Top-level Cli struct, Command enum, GlobalOpts
   args/
     common.rs                # GlobalOpts, ListArgs, OutputFormat
-    <entity>.rs              # 22 entity-specific files (23 total with common.rs)
+    <entity>.rs              # 24 entity-specific files (25 total with common.rs)
   commands/
     mod.rs                   # dispatch() router
     util/
@@ -243,12 +246,14 @@ in `commands/mod.rs::dispatch()` via match on `Command`.
 
 `crates/unifly/src/cli/commands/util/access.rs` defines
 **`ensure_integration_access`** and **`ensure_session_access`**. The
-Integration gate is called by 7 handlers (acl, dns, firewall policies,
-firewall zones, hotspot, networks, traffic_lists, wifi). The Session
-gate is called by `nat`, `events`, and `firewall groups`. The
-`firewall` handler dispatches the gate per-subcommand rather than at
-the top level. New commands should add the appropriate gate call for
-clean error messages when the auth mode is insufficient.
+Integration gate is called by 8 handler files (acl, dns, hotspot,
+networks, traffic_lists, wifi, vpn for servers/tunnels, and firewall
+for policies and zones). The Session gate is called by `events`,
+`nat`, `firewall` (groups subgroup and group-name resolution inside
+policies), and `devices` (port-set / ports / ports-export / port-cycle
+/ tags). The `firewall` handler dispatches the gate per-subcommand
+rather than at the top level. New commands should add the appropriate
+gate call for clean error messages when the auth mode is insufficient.
 
 ### Output Formats
 
@@ -447,6 +452,13 @@ All credentials flow through `secrecy::SecretString`. Do not:
 - Store them in plain files outside the OS keyring unless the user
   explicitly opts in via `auth_mode` config
 
+**Credential precedence**: when both an explicit `api_key` (or
+`password`) is set in a profile's TOML config and a corresponding
+keyring entry exists, the explicit config value wins. This is the
+opposite of the older behavior; see PR #22 (`config/mod.rs` resolve
+paths). Treat this as the contract for any code that reaches into
+config when materializing `AuthCredentials`.
+
 ### Dependencies
 
 `deny.toml` enforces:
@@ -627,6 +639,32 @@ workflow.
   `wifi` resolves to IP.
 - **`wifi neighbors`** defaults to 25 results. Use `--all` or `--limit N`
   to see more.
+- **`devices ports / ports-export / port-set`** are the switch port
+  config-as-code surface. Port indices are **1-based** to match the
+  controller's wire format. `port-set --from-file` accepts a JSONC
+  payload matching `ApplyPortsRequest` (a `ports` array with per-port
+  `index`, `name`, `mode`, `native_network_id`/`native_vlan`,
+  `tagged_network_ids`/`tagged_vlans`, `tagged_all`, `poe`, `speed`,
+  `reset`). Splice semantics: ports not listed keep their existing
+  override; `"reset": true` removes that port's entry. The CLI `--poe`
+  flag accepts only `off`, `auto`, `pasv24`, `passthrough` (no `on`,
+  because `auto` IS the on/negotiate mode). Setting speed to "auto"
+  on the wire means `autoneg: true` with no `speed` field, not
+  `"speed": "auto"` (which the controller rejects). `ports
+--with-clients` and `ports-export --with-clients` annotate output
+  with connected clients (and `// last-seen <ts>: <mac>` markers in
+  the export, for git-diff drift detection).
+- **`settings`** (top-level) reads and writes site-level Session API
+  settings. Subcommands: `list`, `get <KEY>`, `set <KEY>`, `export`.
+  Session-only — needs `auth_mode = "hybrid"` or `"session"`.
+- **`vpn` is broad now**. `vpn servers / tunnels` are read-only views
+  on the modern Integration API; `vpn site-to-site / remote-access /
+clients / peers / magic-site-to-site / settings` are Session-backed
+  and most use the Session gate. `vpn connections list/get/restart`
+  is the legacy v2 connection inventory and restart path. `vpn
+remote-access suggest-port` and `vpn remote-access download-config
+<id>` are convenience helpers; `vpn peers subnets` enumerates
+  configured peer subnets.
 - **Serde defaults to PascalCase** for enums without `#[serde(rename_all
 = "...")]`. When writing JSON payload files for `--from-file`, use
   `"Gateway"` not `"gateway"`, `"Wpa2Personal"` not `"wpa2_personal"`.
@@ -654,8 +692,8 @@ workflow.
 
 - One entity per file under `cli/args/` and `cli/commands/`.
 - When a command has many subhandlers (e.g. `devices`, `clients`,
-  `firewall`, `config_cmd`, `acl`), split into a subdirectory with
-  `mod.rs` and per-subcommand files.
+  `firewall`, `config_cmd`, `acl`, `cloud`, `vpn`, `settings`), split
+  into a subdirectory with `mod.rs` and per-subcommand files.
 - Domain types live in `unifly-api/src/model/<entity>.rs` and are
   re-exported from `lib.rs`.
 - Request structs for mutations live in

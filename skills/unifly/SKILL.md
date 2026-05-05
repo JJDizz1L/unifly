@@ -137,10 +137,12 @@ recipes with runnable shell scripts, consult `references/workflows.md`.
 ### `--from-file` for complex create/update
 
 Most entities accept `--from-file <path.json>` (or `-F`) instead of flag
-salad: `networks`, `wifi`, `firewall policies`, `firewall zones`, `nat policies`,
-`acl`, `dns`, `traffic-lists`, `hotspot`, `vpn site-to-site`, `vpn remote-access`,
-`vpn clients`, and `vpn peers`. Construct the JSON payload, validate it, then
-apply. See `examples/` for payload templates.
+salad: `networks`, `wifi`, `firewall policies`, `firewall zones`, `firewall
+groups`, `nat policies`, `acl`, `dns`, `traffic-lists`, `hotspot`, `vpn
+site-to-site`, `vpn remote-access`, `vpn clients`, `vpn peers`, `vpn settings
+patch`, and `devices port-set` (JSONC for switch port config-as-code).
+Construct the JSON payload, validate it, then apply. See `examples/` for
+payload templates.
 
 ```bash
 unifly networks create -F examples/network-iot-vlan.json

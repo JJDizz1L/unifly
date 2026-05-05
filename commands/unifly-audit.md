@@ -78,7 +78,7 @@ unifly networks list --all -p {{profile}} -o json
 
 For each network, check `unifly networks refs <id>` for cross-references.
 
-When `-p {{profile}}` is provided, prepend `-p -p {{profile}}` to all commands.
+When `-p {{profile}}` is provided, the `-p {{profile}}` flag is already wired into every command above; no further substitution is needed.
 
 ## Result Reporting
 

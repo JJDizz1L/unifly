@@ -108,7 +108,7 @@ system, admin, dpi, radius, wans, countries.
 1. Check overall health: `unifly system health -o json`
 2. View network topology for structural overview: `unifly topology`
 3. List devices and identify offline/degraded ones: `unifly devices list --all -o json`
-4. Check recent events for clues: `unifly events list --hours 4 -o json`
+4. Check recent events for clues: `unifly events list --within 4 -o json`
 5. Review active alarms: `unifly alarms list --unarchived -o json`
 6. Inspect specific device stats if needed: `unifly devices stats <mac> -o json`
 7. Find specific clients quickly: `unifly clients find "<name or ip>"`

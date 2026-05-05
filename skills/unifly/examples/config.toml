@@ -25,12 +25,14 @@ api_key_env = "UNIFI_OFFICE_API_KEY"
 insecure = true  # self-signed cert
 timeout = 60
 
-# Remote site: Legacy auth only (older firmware)
+# Remote site: Session auth only (older firmware or controllers
+# without an Integration API key). `"legacy"` is a deprecated alias.
 [profiles.warehouse]
 controller = "https://warehouse.example.com:8443"
 site = "default"
-auth_mode = "legacy"
+auth_mode = "session"
 username = "readonly-admin"
-# password stored in keyring
+# password stored in keyring; an explicit `password = "..."` here would
+# override the keyring entry.
 ca_cert = "/etc/ssl/certs/warehouse-ca.pem"
 timeout = 45

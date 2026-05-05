@@ -11,14 +11,14 @@ Async Rust client for UniFi controller APIs.
 `unifly-api` provides the HTTP transport layer for communicating with Ubiquiti UniFi Network controllers. It supports two distinct API surfaces:
 
 - **Integration API**: RESTful OpenAPI-based interface authenticated via `X-API-KEY` header. Primary surface for CRUD operations on devices, clients, networks, firewall rules, and other managed entities.
-- **Legacy API**: Session/cookie-authenticated endpoints under `/api/s/{site}/`. Used for data not yet exposed by the Integration API: events, traffic stats, admin users, DPI data, system info, and real-time WebSocket events.
+- **Session API**: Session-cookie + CSRF authenticated endpoints under `/proxy/network/api/` and `/proxy/network/v2/api/`, plus `X-API-KEY` on UniFi OS session HTTP. Covers events, traffic stats, Wi-Fi observability, DPI, admin users, system info, switch port management, firewall groups, site settings, and the WebSocket event stream.
 
 Both clients share a common `TransportConfig` for reqwest-based HTTP transport with configurable TLS verification (system CA, custom PEM, or danger-accept for self-signed controllers) and timeout settings.
 
 ## Features
 
 - Integration API client with API key authentication
-- Legacy API client with cookie/CSRF token handling
+- Session API client with cookie + CSRF token handling
 - WebSocket event stream with auto-reconnect
 - Configurable TLS modes (system CA, custom CA bundle, danger-accept-invalid)
 - Async/await with `tokio` runtime

@@ -48,7 +48,7 @@ unifly devices ports <id|mac> [--with-clients]
 unifly devices ports-export <id|mac> [--all] [--with-clients]
 unifly devices port-set <id|mac> [<port_idx>] [--mode access|trunk|mirror]
     [--native-vlan <network>] [--tagged-vlans <network,...>]
-    [--name <label>] [--poe on|off|auto|pasv24|passthrough]
+    [--name <label>] [--poe off|auto|pasv24|passthrough]
     [--speed auto|10|100|1000|2500|5000|10000]
     [-F <FILE> | --from-file <FILE>] [--reset]
 unifly devices stats <id|mac>
@@ -64,7 +64,9 @@ unifly devices tags [subcommands]
 - `locate --on` is explicit boolean, not a toggle. `--on true` lights,
   `--on false` clears. Idempotent for automation.
 - `upgrade --url` allows side-loading custom firmware URLs.
-- `port-cycle` port index is zero-based.
+- `port-cycle` port index is **1-based**, matching `devices ports`
+  output and the controller's wire format. There is no `--poe on`;
+  use `--poe auto` (UniFi treats `auto` as the on/negotiate mode).
 - `ports` / `port-set` / `ports-export` use **Session API routes** (the
   Integration API does not expose port VLAN configuration), but they
   are reachable using a UniFi OS Integration API key — the session
@@ -408,7 +410,7 @@ unifly hotspot purge --filter "EXPR"
 ## Events `[L]`
 
 ```bash
-unifly events list [--within HOURS] [--all]
+unifly events list [--within HOURS] [--limit N]
 unifly events watch [--types CAT1,CAT2] [-o json]
 ```
 
@@ -676,9 +678,12 @@ unifly cloud sdwan status <id>
 ### `--from-file` / `-F` (universal create/update)
 
 Accepted by: `networks`, `wifi`, `firewall policies`, `firewall zones`,
-`nat policies`, `acl`, `dns`, `traffic-lists`, `hotspot`. The flag
-mutually excludes inline flags on the same field. Prefer `--from-file`
-for anything beyond a handful of flags.
+`firewall groups`, `nat policies`, `acl`, `dns`, `traffic-lists`,
+`hotspot`, `vpn site-to-site`, `vpn remote-access`, `vpn clients`,
+`vpn peers`, `vpn settings patch`, and `devices port-set` (JSONC for
+switch port config-as-code). The flag mutually excludes inline flags
+on the same field. Prefer `--from-file` for anything beyond a handful
+of flags.
 
 ```bash
 unifly networks create -F network.json
