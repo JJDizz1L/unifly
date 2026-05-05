@@ -15,8 +15,8 @@ pub struct CreateFirewallPolicyRequest {
     pub enabled: bool,
     #[serde(default, alias = "logging")]
     pub logging_enabled: bool,
-    #[serde(default = "default_true")]
-    pub allow_return_traffic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_return_traffic: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +41,16 @@ pub struct CreateFirewallPolicyRequest {
     pub dst_ip: Option<Vec<String>>,
     #[serde(default, skip_serializing)]
     pub dst_port: Option<Vec<String>>,
+
+    // Group reference shorthands (resolved by CLI to source/destination_filter)
+    #[serde(default, skip_serializing)]
+    pub src_port_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub dst_port_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub src_address_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub dst_address_group: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -83,6 +93,16 @@ pub struct UpdateFirewallPolicyRequest {
     pub dst_ip: Option<Vec<String>>,
     #[serde(default, skip_serializing)]
     pub dst_port: Option<Vec<String>>,
+
+    // Group reference shorthands (resolved by CLI to source/destination_filter)
+    #[serde(default, skip_serializing)]
+    pub src_port_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub dst_port_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub src_address_group: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub dst_address_group: Option<String>,
 }
 
 /// Port-side specification: either inline values or a reference to a
@@ -132,13 +152,24 @@ pub enum TrafficFilterSpec {
     Port {
         ports: PortSpec,
     },
+    /// Address-group filter referencing a firewall group (address-group)
+    /// by its `external_id`. May carry an optional port restriction in
+    /// the same filter (mirrors what `IpAddress` supports for inline
+    /// addresses).
+    IpMatchingList {
+        list_id: String,
+        #[serde(default)]
+        match_opposite: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ports: Option<PortSpec>,
+    },
 }
 
-/// Internal wire-format wrapper used during deserialization to accept the
-/// pre-PortSpec shape from existing JSON files. The legacy `Port` variant
-/// stored ports as a flat `Vec<String>` with `match_opposite` at the
-/// variant level instead of nested inside `PortSpec`. Both shapes round
-/// through here into [`TrafficFilterSpec`].
+/// Internal wire-format wrapper used during deserialization to accept
+/// pre-PortSpec JSON files. The legacy `Port` variant stored ports as a
+/// flat `Vec<String>` with `match_opposite` at the variant level. The
+/// legacy `port_matching_list` top-level variant carried a port-group
+/// reference; it lowers to `Port { ports: PortSpec::MatchingList { ... } }`.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum TrafficFilterSpecWire {
@@ -164,6 +195,22 @@ enum TrafficFilterSpecWire {
         /// `PortSpec` during conversion.
         #[serde(default)]
         match_opposite: bool,
+    },
+    /// Legacy top-level port-group reference. Lowered to `Port` with a
+    /// nested `PortSpec::MatchingList` during conversion.
+    PortMatchingList {
+        list_id: String,
+        #[serde(default)]
+        match_opposite: bool,
+    },
+    /// Address-group filter. Optional `ports` companion supports rules
+    /// like "members of address-group X on port-group Y" in one filter.
+    IpMatchingList {
+        list_id: String,
+        #[serde(default)]
+        match_opposite: bool,
+        #[serde(default, deserialize_with = "deserialize_port_spec_opt")]
+        ports: Option<PortSpec>,
     },
 }
 
@@ -202,6 +249,24 @@ impl From<TrafficFilterSpecWire> for TrafficFilterSpec {
                 }
                 Self::Port { ports }
             }
+            TrafficFilterSpecWire::PortMatchingList {
+                list_id,
+                match_opposite,
+            } => Self::Port {
+                ports: PortSpec::MatchingList {
+                    list_id,
+                    match_opposite,
+                },
+            },
+            TrafficFilterSpecWire::IpMatchingList {
+                list_id,
+                match_opposite,
+                ports,
+            } => Self::IpMatchingList {
+                list_id,
+                match_opposite,
+                ports,
+            },
         }
     }
 }
@@ -491,13 +556,41 @@ pub struct UpdateNatPolicyRequest {
     pub translated_port: Option<String>,
 }
 
+// ── Firewall Group ───────────────────────────────────────────
+
+use crate::model::FirewallGroupType;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFirewallGroupRequest {
+    pub name: String,
+    /// Group type. Required from `--from-file`; the CLI flag path always
+    /// populates this. Accepts kebab-case (`"port-group"`,
+    /// `"address-group"`, `"ipv6-address-group"`) matching the CLI
+    /// `--type` flag, and PascalCase variant names for backward
+    /// compatibility. Aliased as `type` so JSON files mirroring the
+    /// CLI flag (`{"type": "address-group", ...}`) round-trip cleanly.
+    #[serde(alias = "type")]
+    pub group_type: FirewallGroupType,
+    #[serde(alias = "members")]
+    pub group_members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateFirewallGroupRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "members")]
+    pub group_members: Option<Vec<String>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CreateAclRuleRequest, CreateFirewallPolicyRequest, PortSpec, TrafficFilterSpec,
-        UpdateAclRuleRequest, UpdateFirewallPolicyRequest,
+        CreateAclRuleRequest, CreateFirewallGroupRequest, CreateFirewallPolicyRequest, PortSpec,
+        TrafficFilterSpec, UpdateAclRuleRequest, UpdateFirewallGroupRequest,
+        UpdateFirewallPolicyRequest,
     };
-    use crate::model::FirewallAction;
+    use crate::model::{FirewallAction, FirewallGroupType};
 
     /// Bug 1 regression: dst_ip and dst_port in --from-file JSON must
     /// deserialize into the shorthand fields (not be silently dropped).
@@ -770,5 +863,209 @@ mod tests {
             Some("DEVICE")
         );
         assert_eq!(value.get("rule_type"), None);
+    }
+
+    // ── Group shorthand tests ──────────────────────────────────────
+
+    #[test]
+    fn group_shorthand_fields_deserialize() {
+        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
+            "name": "HA IoT Services",
+            "action": "Allow",
+            "source_zone_id": "aaa",
+            "destination_zone_id": "bbb",
+            "dst_port_group": "HA",
+            "src_address_group": "Cloud IOT"
+        }))
+        .expect("group shorthands should deserialize");
+
+        assert_eq!(req.dst_port_group.as_deref(), Some("HA"));
+        assert_eq!(req.src_address_group.as_deref(), Some("Cloud IOT"));
+        assert!(req.destination_filter.is_none());
+        assert!(req.source_filter.is_none());
+    }
+
+    #[test]
+    fn group_shorthand_fields_skip_serializing() {
+        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
+            "name": "Test",
+            "action": "Allow",
+            "source_zone_id": "aaa",
+            "destination_zone_id": "bbb",
+            "dst_port_group": "HA",
+            "dst_address_group": "Cloud IOT"
+        }))
+        .expect("should deserialize");
+
+        let value = serde_json::to_value(&req).expect("should serialize");
+        assert!(
+            value.get("dst_port_group").is_none(),
+            "dst_port_group must not serialize"
+        );
+        assert!(
+            value.get("dst_address_group").is_none(),
+            "dst_address_group must not serialize"
+        );
+        assert!(
+            value.get("src_port_group").is_none(),
+            "src_port_group must not serialize"
+        );
+        assert!(
+            value.get("src_address_group").is_none(),
+            "src_address_group must not serialize"
+        );
+    }
+
+    #[test]
+    fn update_group_shorthand_fields_deserialize() {
+        let req: UpdateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
+            "dst_port_group": "HA"
+        }))
+        .expect("update group shorthand should deserialize");
+
+        assert_eq!(req.dst_port_group.as_deref(), Some("HA"));
+    }
+
+    /// Firewall-group `--from-file` JSON should accept `members` (mirroring
+    /// the CLI flag name) as well as the wire-level `group_members`.
+    /// Otherwise serde silently drops the CLI-style field and a file
+    /// written from `--help` output PUTs an unchanged group while
+    /// reporting success.
+    #[test]
+    fn create_firewall_group_request_accepts_members_alias() {
+        let req: CreateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "name": "HA",
+            "type": "port-group",
+            "members": ["80", "8000-8002"]
+        }))
+        .expect("members alias should deserialize");
+
+        assert_eq!(req.name, "HA");
+        assert_eq!(req.group_members, vec!["80", "8000-8002"]);
+    }
+
+    /// `--from-file` JSON should accept the kebab-case `type` field
+    /// (mirroring the CLI `--type` flag) and deserialize each known
+    /// group type into its Rust variant. Without this, a file like
+    /// `{"type": "address-group", ...}` was silently parsed as a port
+    /// group via the previous default, corrupting the wire payload.
+    #[test]
+    fn create_firewall_group_request_kebab_case_type_alias() {
+        let port: CreateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "name": "HA",
+            "type": "port-group",
+            "members": ["80"]
+        }))
+        .expect("kebab-case port-group should deserialize");
+        assert_eq!(port.group_type, FirewallGroupType::PortGroup);
+
+        let addr: CreateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "name": "Cloud IOT",
+            "type": "address-group",
+            "members": ["10.0.0.1"]
+        }))
+        .expect("kebab-case address-group should deserialize");
+        assert_eq!(addr.group_type, FirewallGroupType::AddressGroup);
+
+        let ipv6: CreateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "name": "ULA",
+            "type": "ipv6-address-group",
+            "members": ["fd00::/8"]
+        }))
+        .expect("kebab-case ipv6-address-group should deserialize");
+        assert_eq!(ipv6.group_type, FirewallGroupType::Ipv6AddressGroup);
+
+        // PascalCase still works for backward compatibility with files
+        // produced before the alias was added.
+        let legacy: CreateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "name": "HA",
+            "group_type": "AddressGroup",
+            "members": ["10.0.0.1"]
+        }))
+        .expect("PascalCase variant should deserialize");
+        assert_eq!(legacy.group_type, FirewallGroupType::AddressGroup);
+    }
+
+    /// Missing type should now error rather than silently default to
+    /// `port-group` -- a payload like `{"name":"x","members":["10.0.0.1"]}`
+    /// was getting silently classified as a port group with addresses
+    /// as members, producing an invalid wire payload.
+    #[test]
+    fn create_firewall_group_request_requires_type() {
+        let result: Result<CreateFirewallGroupRequest, _> =
+            serde_json::from_value(serde_json::json!({
+                "name": "Cloud IOT",
+                "members": ["10.0.0.1"]
+            }));
+        assert!(
+            result.is_err(),
+            "missing `type` / `group_type` should not silently default to PortGroup"
+        );
+    }
+
+    #[test]
+    fn update_firewall_group_request_accepts_members_alias() {
+        let req: UpdateFirewallGroupRequest = serde_json::from_value(serde_json::json!({
+            "members": ["80", "443"]
+        }))
+        .expect("members alias should deserialize");
+
+        assert_eq!(
+            req.group_members.as_deref(),
+            Some(&["80".into(), "443".into()][..])
+        );
+    }
+
+    // ── TrafficFilterSpec matching list variants ───────────────────
+
+    /// Port-group references are modeled as `Port { ports: PortSpec::MatchingList }`.
+    /// The legacy `port_matching_list` top-level variant is accepted on
+    /// deserialize and lowered to the new shape.
+    #[test]
+    fn port_group_reference_round_trips_via_port_variant() {
+        let spec = TrafficFilterSpec::Port {
+            ports: PortSpec::MatchingList {
+                list_id: "24740a56-9cb9-4890-a5ac-589d30914a55".into(),
+                match_opposite: false,
+            },
+        };
+        let json = serde_json::to_value(&spec).expect("should serialize");
+        assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("port"));
+
+        // Legacy port_matching_list shape still deserializes (lowered to Port).
+        let legacy = serde_json::json!({
+            "type": "port_matching_list",
+            "list_id": "24740a56-9cb9-4890-a5ac-589d30914a55",
+            "match_opposite": false,
+        });
+        let from_legacy: TrafficFilterSpec =
+            serde_json::from_value(legacy).expect("legacy shape should deserialize");
+        assert!(matches!(
+            from_legacy,
+            TrafficFilterSpec::Port {
+                ports: PortSpec::MatchingList { .. },
+            }
+        ));
+    }
+
+    #[test]
+    fn ip_matching_list_round_trips() {
+        let spec = TrafficFilterSpec::IpMatchingList {
+            list_id: "b777b27c-410c-4b40-8489-a61bf1a536d4".into(),
+            match_opposite: true,
+            ports: None,
+        };
+        let json = serde_json::to_value(&spec).expect("should serialize");
+        assert_eq!(
+            json.get("type").and_then(|v| v.as_str()),
+            Some("ip_matching_list")
+        );
+
+        let round_tripped: TrafficFilterSpec =
+            serde_json::from_value(json).expect("should deserialize");
+        match round_tripped {
+            TrafficFilterSpec::IpMatchingList { match_opposite, .. } => assert!(match_opposite),
+            other => panic!("expected IpMatchingList, got {other:?}"),
+        }
     }
 }
