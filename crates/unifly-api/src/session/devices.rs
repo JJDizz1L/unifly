@@ -136,4 +136,22 @@ impl SessionClient {
             .await?;
         Ok(())
     }
+
+    /// Update the `port_overrides` array on a device.
+    ///
+    /// `PUT /api/s/{site}/rest/device/{device_id}` replaces the full
+    /// `port_overrides` list in one shot. Callers should merge the existing
+    /// overrides with the desired change before calling this method.
+    pub async fn update_device_port_overrides(
+        &self,
+        device_id: &str,
+        port_overrides: Vec<serde_json::Value>,
+    ) -> Result<(), Error> {
+        let url = self.site_url(&format!("rest/device/{device_id}"));
+        debug!(device_id, "updating device port_overrides");
+        let _: Vec<serde_json::Value> = self
+            .put(url, &json!({ "port_overrides": port_overrides }))
+            .await?;
+        Ok(())
+    }
 }

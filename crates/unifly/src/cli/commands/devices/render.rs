@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tabled::Tabled;
-use unifly_api::Device;
+use unifly_api::{Device, PoeMode, PortMode, PortProfile, PortSpeedSetting, PortState, StpState};
 
 use crate::cli::output::Painter;
 
@@ -194,6 +194,126 @@ pub(super) fn device_tag_row(value: &serde_json::Value, painter: &Painter) -> De
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(""),
         ),
+    }
+}
+
+#[derive(Tabled)]
+pub(super) struct PortRow {
+    #[tabled(rename = "#")]
+    pub(super) index: String,
+    #[tabled(rename = "Name")]
+    pub(super) name: String,
+    #[tabled(rename = "Link")]
+    pub(super) link: String,
+    #[tabled(rename = "Mode")]
+    pub(super) mode: String,
+    #[tabled(rename = "Native VLAN")]
+    pub(super) native: String,
+    #[tabled(rename = "Tagged VLANs")]
+    pub(super) tagged: String,
+    #[tabled(rename = "PoE")]
+    pub(super) poe: String,
+    #[tabled(rename = "Speed")]
+    pub(super) speed: String,
+    #[tabled(rename = "STP")]
+    pub(super) stp: String,
+}
+
+pub(super) fn port_row(profile: &PortProfile, painter: &Painter) -> PortRow {
+    PortRow {
+        index: painter.number(&profile.index.to_string()),
+        name: painter.name(profile.name.as_deref().unwrap_or("")),
+        link: painter.state(match profile.link_state {
+            PortState::Up => "UP",
+            PortState::Down => "DOWN",
+            PortState::Unknown => "?",
+        }),
+        mode: painter.keyword(match profile.mode {
+            PortMode::Access => "access",
+            PortMode::Trunk => "trunk",
+            PortMode::Mirror => "mirror",
+            PortMode::Unknown => "-",
+        }),
+        native: painter.muted(&format_native(profile)),
+        tagged: painter.muted(&format_tagged(profile)),
+        poe: painter.muted(format_poe(profile.poe_mode)),
+        speed: painter.muted(&format_speed(profile)),
+        stp: painter.muted(match profile.stp_state {
+            StpState::Disabled => "disabled",
+            StpState::Blocking => "blocking",
+            StpState::Listening => "listening",
+            StpState::Learning => "learning",
+            StpState::Forwarding => "forwarding",
+            StpState::Broken => "broken",
+            StpState::Unknown => "-",
+        }),
+    }
+}
+
+fn format_native(profile: &PortProfile) -> String {
+    match (
+        profile.native_network_name.as_deref(),
+        profile.native_vlan_id,
+    ) {
+        (Some(name), Some(vlan)) => format!("{name} ({vlan})"),
+        (Some(name), None) => name.to_owned(),
+        (None, Some(vlan)) => format!("vlan {vlan}"),
+        (None, None) => profile
+            .native_network_id
+            .clone()
+            .unwrap_or_else(|| "-".into()),
+    }
+}
+
+fn format_tagged(profile: &PortProfile) -> String {
+    if profile.tagged_all {
+        return "all".into();
+    }
+    if profile.tagged_network_names.is_empty() && profile.tagged_vlan_ids.is_empty() {
+        if profile.tagged_network_ids.is_empty() {
+            return "-".into();
+        }
+        return profile.tagged_network_ids.join(",");
+    }
+    if !profile.tagged_network_names.is_empty() {
+        return profile.tagged_network_names.join(",");
+    }
+    profile
+        .tagged_vlan_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_poe(mode: Option<PoeMode>) -> &'static str {
+    match mode {
+        Some(PoeMode::Auto) => "auto",
+        Some(PoeMode::Off) => "off",
+        Some(PoeMode::Passive24V) => "pasv24",
+        Some(PoeMode::Passthrough) => "passthrough",
+        Some(PoeMode::Other) => "other",
+        None => "-",
+    }
+}
+
+fn format_speed(profile: &PortProfile) -> String {
+    let cfg_label = profile.speed_setting.map(|s| match s {
+        PortSpeedSetting::Auto => "auto".to_owned(),
+        other => other
+            .as_mbps()
+            .map_or_else(|| "auto".to_owned(), |mbps| mbps.to_string()),
+    });
+    match (profile.speed_setting, cfg_label, profile.link_speed_mbps) {
+        (Some(cfg), Some(label), Some(live))
+            if cfg.as_mbps().is_some_and(|pinned| pinned == live) =>
+        {
+            label
+        }
+        (_, Some(label), Some(live)) => format!("{label} ({live})"),
+        (_, Some(label), None) => label,
+        (_, None, Some(live)) => live.to_string(),
+        (_, None, None) => "-".into(),
     }
 }
 

@@ -48,10 +48,8 @@ impl OnboardingScreen {
                     }
                 }
             }
-            Action::Tick => {
-                if self.testing {
-                    self.throbber_state.calc_next();
-                }
+            Action::Tick if self.testing => {
+                self.throbber_state.calc_next();
             }
             _ => {}
         }
@@ -77,15 +75,13 @@ impl OnboardingScreen {
 
     fn handle_auth_mode_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.auth_mode_index > 0 {
-                    self.auth_mode_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.auth_mode_index > 0 => {
+                self.auth_mode_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.auth_mode_index < AuthMode::ALL.len() - 1 {
-                    self.auth_mode_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.auth_mode_index < AuthMode::ALL.len() - 1 =>
+            {
+                self.auth_mode_index += 1;
             }
             KeyCode::Enter => self.advance(),
             KeyCode::Esc => self.go_back(),

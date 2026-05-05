@@ -186,10 +186,8 @@ impl SettingsScreen {
                     self.test_error = Some(message.clone());
                 }
             },
-            Action::Tick => {
-                if self.state == SettingsState::Testing {
-                    self.throbber_state.calc_next();
-                }
+            Action::Tick if self.state == SettingsState::Testing => {
+                self.throbber_state.calc_next();
             }
             _ => {}
         }

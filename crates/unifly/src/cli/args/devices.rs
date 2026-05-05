@@ -93,4 +93,83 @@ pub enum DevicesCommand {
 
     /// List device tags
     Tags(ListArgs),
+
+    /// List switch ports with VLAN configuration (session API)
+    Ports {
+        /// Device ID (UUID) or MAC address
+        device: String,
+    },
+
+    /// Configure a switch port (session API)
+    PortSet {
+        /// Device ID (UUID) or MAC address
+        device: String,
+
+        /// Port index to configure (1-based)
+        #[arg(value_name = "PORT_IDX")]
+        port: u32,
+
+        /// Operational mode
+        #[arg(long, value_enum)]
+        mode: Option<PortModeArg>,
+
+        /// Native (untagged) VLAN: network name or session _id
+        #[arg(long, value_name = "NETWORK")]
+        native_vlan: Option<String>,
+
+        /// Comma-separated list of tagged VLAN networks (names or session _ids)
+        #[arg(long, value_name = "NETWORK,...", value_delimiter = ',')]
+        tagged_vlans: Option<Vec<String>>,
+
+        /// User-facing port label
+        #[arg(long)]
+        name: Option<String>,
+
+        /// PoE mode for this port
+        #[arg(long, value_enum)]
+        poe: Option<PoeArg>,
+
+        /// Configured link speed
+        #[arg(long, value_enum)]
+        speed: Option<SpeedArg>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum PortModeArg {
+    Access,
+    Trunk,
+    Mirror,
+}
+
+/// PoE mode for a switch port. UniFi PoE has no separate "on" mode --
+/// `auto` IS the on/negotiate mode -- so the CLI exposes only the four
+/// distinct wire values to keep `port-set --poe X` round-trippable
+/// against `devices ports` output.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum PoeArg {
+    Off,
+    Auto,
+    Pasv24,
+    Passthrough,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum SpeedArg {
+    Auto,
+    #[value(name = "10")]
+    Mbps10,
+    #[value(name = "100")]
+    Mbps100,
+    #[value(name = "1000")]
+    Mbps1000,
+    #[value(name = "2500")]
+    Mbps2500,
+    #[value(name = "5000")]
+    Mbps5000,
+    #[value(name = "10000")]
+    Mbps10000,
 }

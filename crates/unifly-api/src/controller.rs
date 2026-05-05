@@ -20,12 +20,15 @@ use tokio_util::sync::CancellationToken;
 mod commands;
 mod lifecycle;
 mod payloads;
+mod ports;
 mod query;
 mod refresh;
 mod runtime;
 mod session_queries;
 mod subscriptions;
 mod support;
+
+pub use ports::PortProfileUpdate;
 
 use self::support::{
     client_mac, device_mac, integration_client_context, integration_site_context,

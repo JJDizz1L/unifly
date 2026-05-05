@@ -264,7 +264,7 @@ pub(super) async fn handle(
                 .filter(|u| u.use_fixedip.unwrap_or(false))
                 .map(Reservation::from)
                 .collect();
-            let snapshot = util::apply_list_args(reservations.into_iter(), &list, |res, filter| {
+            let snapshot = util::apply_list_args(reservations, &list, |res, filter| {
                 util::matches_json_filter(res, filter)
             });
             let out = output::render_list(

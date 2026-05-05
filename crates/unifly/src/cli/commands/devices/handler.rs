@@ -1,15 +1,18 @@
 use std::sync::Arc;
 
-use unifly_api::{Command as CoreCommand, Controller, Device, MacAddress};
+use unifly_api::{
+    Command as CoreCommand, Controller, Device, MacAddress, PoeMode, PortMode, PortProfileUpdate,
+    PortSpeedSetting,
+};
 
-use crate::cli::args::{DevicesArgs, DevicesCommand, GlobalOpts};
+use crate::cli::args::{DevicesArgs, DevicesCommand, GlobalOpts, PoeArg, PortModeArg, SpeedArg};
 use crate::cli::commands::util;
 use crate::cli::error::CliError;
 use crate::cli::output;
 
 use super::render::{
     detail, device_row, device_tag_identity, device_tag_row, pending_device_identity,
-    pending_device_row, stats_detail,
+    pending_device_row, port_row, stats_detail,
 };
 
 fn find_device(controller: &Controller, needle: &str) -> Option<Arc<Device>> {
@@ -209,5 +212,154 @@ pub(super) async fn handle(
             output::print_output(&out, global.quiet);
             Ok(())
         }
+
+        DevicesCommand::Ports { device } => {
+            util::ensure_session_access(controller, "devices ports").await?;
+            let mac = util::resolve_device_mac(controller, &device)?;
+            let profiles = controller.list_device_ports(&mac).await?;
+            let out = output::render_list(
+                &global.output,
+                &profiles,
+                |profile| port_row(profile, &painter),
+                |profile| profile.index.to_string(),
+            );
+            output::print_output(&out, global.quiet);
+            Ok(())
+        }
+
+        DevicesCommand::PortSet {
+            device,
+            port,
+            mode,
+            native_vlan,
+            tagged_vlans,
+            name,
+            poe,
+            speed,
+        } => {
+            handle_port_set(
+                controller,
+                global,
+                &device,
+                port,
+                mode,
+                native_vlan,
+                tagged_vlans,
+                name,
+                poe,
+                speed,
+            )
+            .await
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_port_set(
+    controller: &Controller,
+    global: &GlobalOpts,
+    device: &str,
+    port: u32,
+    mode: Option<PortModeArg>,
+    native_vlan: Option<String>,
+    tagged_vlans: Option<Vec<String>>,
+    name: Option<String>,
+    poe: Option<PoeArg>,
+    speed: Option<SpeedArg>,
+) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "devices port-set").await?;
+    let mac = util::resolve_device_mac(controller, device)?;
+
+    if mode.is_none()
+        && native_vlan.is_none()
+        && tagged_vlans.is_none()
+        && name.is_none()
+        && poe.is_none()
+        && speed.is_none()
+    {
+        return Err(CliError::Validation {
+            field: "port-set".into(),
+            reason:
+                "at least one of --mode / --native-vlan / --tagged-vlans / --name / --poe / --speed is required"
+                    .into(),
+        });
+    }
+
+    if matches!(mode, Some(PortModeArg::Access))
+        && tagged_vlans.as_ref().is_some_and(|v| !v.is_empty())
+    {
+        return Err(CliError::Validation {
+            field: "tagged-vlans".into(),
+            reason: "access mode cannot carry tagged VLANs; use --mode trunk with --tagged-vlans"
+                .into(),
+        });
+    }
+
+    let native_network_id = match native_vlan {
+        Some(name) => Some(controller.resolve_network_session_id(&name).await?.0),
+        None => None,
+    };
+    let tagged_network_ids = resolve_tagged_networks(controller, tagged_vlans).await?;
+
+    let update = PortProfileUpdate {
+        name,
+        mode: mode.map(map_port_mode),
+        native_network_id,
+        tagged_network_ids,
+        poe_mode: poe.map(map_poe),
+        speed_setting: speed.map(map_speed),
+    };
+
+    controller.update_device_port(&mac, port, &update).await?;
+    if !global.quiet {
+        eprintln!("Port {port} updated on device {device}");
+    }
+    Ok(())
+}
+
+async fn resolve_tagged_networks(
+    controller: &Controller,
+    tagged_vlans: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, CliError> {
+    let Some(names) = tagged_vlans else {
+        return Ok(None);
+    };
+    let mut ids = Vec::with_capacity(names.len());
+    for n in names {
+        let trimmed = n.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        ids.push(controller.resolve_network_session_id(trimmed).await?.0);
+    }
+    Ok(Some(ids))
+}
+
+fn map_port_mode(mode: PortModeArg) -> PortMode {
+    match mode {
+        PortModeArg::Access => PortMode::Access,
+        PortModeArg::Trunk => PortMode::Trunk,
+        PortModeArg::Mirror => PortMode::Mirror,
+    }
+}
+
+fn map_poe(arg: PoeArg) -> PoeMode {
+    match arg {
+        PoeArg::Auto => PoeMode::Auto,
+        PoeArg::Off => PoeMode::Off,
+        PoeArg::Pasv24 => PoeMode::Passive24V,
+        PoeArg::Passthrough => PoeMode::Passthrough,
+    }
+}
+
+fn map_speed(arg: SpeedArg) -> PortSpeedSetting {
+    match arg {
+        SpeedArg::Auto => PortSpeedSetting::Auto,
+        SpeedArg::Mbps10 => PortSpeedSetting::Mbps10,
+        SpeedArg::Mbps100 => PortSpeedSetting::Mbps100,
+        SpeedArg::Mbps1000 => PortSpeedSetting::Mbps1000,
+        SpeedArg::Mbps2500 => PortSpeedSetting::Mbps2500,
+        SpeedArg::Mbps5000 => PortSpeedSetting::Mbps5000,
+        SpeedArg::Mbps10000 => PortSpeedSetting::Mbps10000,
     }
 }

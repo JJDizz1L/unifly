@@ -66,7 +66,7 @@ pub use transport::{TlsMode, TransportConfig};
 pub use command::requests::*;
 pub use command::{Command, CommandResult};
 pub use config::{AuthCredentials, ControllerConfig, TlsVerification};
-pub use controller::{ConnectionState, Controller};
+pub use controller::{ConnectionState, Controller, PortProfileUpdate};
 pub use core_error::CoreError;
 pub use store::DataStore;
 pub use stream::EntityStream;
@@ -75,7 +75,8 @@ pub use model::{
     AclRule, Admin, Alarm, Client, ClientType, Country, Device, DeviceState, DeviceType,
     DpiApplication, DpiCategory, EntityId, Event, EventCategory, EventSeverity, FirewallPolicy,
     FirewallZone, HealthSummary, IpsecSa, MacAddress, MagicSiteToSiteVpnConfig, NatPolicy, NatType,
-    Network, RadiusProfile, RemoteAccessVpnServer, Site, SiteToSiteVpn, SysInfo, SystemInfo,
-    TrafficMatchingList, VpnClientConnection, VpnClientProfile, VpnServer, VpnSetting, VpnTunnel,
-    WanInterface, WireGuardPeer,
+    Network, PoeMode, PortMode, PortProfile, PortSpeedSetting, PortState, RadiusProfile,
+    RemoteAccessVpnServer, Site, SiteToSiteVpn, StpState, SysInfo, SystemInfo, TrafficMatchingList,
+    VpnClientConnection, VpnClientProfile, VpnServer, VpnSetting, VpnTunnel, WanInterface,
+    WireGuardPeer,
 };

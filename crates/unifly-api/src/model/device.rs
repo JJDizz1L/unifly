@@ -81,6 +81,123 @@ pub struct PoeInfo {
     pub state: PortState,
 }
 
+/// High-level operational mode of a switch port's VLAN profile.
+///
+/// Derived from the Session API's `port_table` / `port_overrides` fields
+/// (`tagged_vlan_mgmt`, `op_mode`) into a single normalized value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortMode {
+    /// Single untagged VLAN (no tagged VLANs allowed).
+    Access,
+    /// Untagged native VLAN plus one or more tagged VLANs.
+    Trunk,
+    /// Port mirrors another port (SPAN/RSPAN).
+    Mirror,
+    /// Mode could not be determined from the available data.
+    Unknown,
+}
+
+/// Spanning-Tree Protocol state for a port, as reported by the switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StpState {
+    Disabled,
+    Blocking,
+    Listening,
+    Learning,
+    Forwarding,
+    Broken,
+    Unknown,
+}
+
+/// PoE operating mode for a switch port (configuration, not live state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PoeMode {
+    /// Automatic negotiation (802.3af/at/bt).
+    Auto,
+    /// PoE explicitly disabled on this port.
+    Off,
+    /// Passive 24V (legacy).
+    Passive24V,
+    /// PoE passthrough (for specific switches).
+    Passthrough,
+    /// Unknown or vendor-specific mode.
+    Other,
+}
+
+/// Configured auto-negotiation / link speed for a port.
+///
+/// `Auto` means negotiate; other variants pin the link to a fixed speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortSpeedSetting {
+    Auto,
+    Mbps10,
+    Mbps100,
+    Mbps1000,
+    Mbps2500,
+    Mbps5000,
+    Mbps10000,
+}
+
+impl PortSpeedSetting {
+    /// Numeric link speed in Mbps, or `None` for `Auto`.
+    ///
+    /// Useful for comparing a configured pinned speed against the live
+    /// negotiated speed without round-tripping through strings.
+    pub fn as_mbps(self) -> Option<u32> {
+        match self {
+            Self::Auto => None,
+            Self::Mbps10 => Some(10),
+            Self::Mbps100 => Some(100),
+            Self::Mbps1000 => Some(1000),
+            Self::Mbps2500 => Some(2500),
+            Self::Mbps5000 => Some(5000),
+            Self::Mbps10000 => Some(10000),
+        }
+    }
+}
+
+/// VLAN and physical profile for a switch port, merged from the Session API's
+/// `port_table` (live state) and `port_overrides` (user configuration).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortProfile {
+    /// 1-based port index as shown in the UniFi UI.
+    pub index: u32,
+    /// User-configured port label (from overrides) or auto-generated name.
+    pub name: Option<String>,
+    /// Link state (up/down/unknown).
+    pub link_state: PortState,
+    /// Operational mode (access / trunk / mirror / unknown).
+    pub mode: PortMode,
+    /// Session `_id` of the native (untagged) network, if any.
+    pub native_network_id: Option<String>,
+    /// Resolved VLAN id of the native network, if known.
+    pub native_vlan_id: Option<u16>,
+    /// Resolved display name of the native network, if known.
+    pub native_network_name: Option<String>,
+    /// Session `_id`s of explicitly tagged networks.
+    pub tagged_network_ids: Vec<String>,
+    /// Resolved VLAN ids of explicitly tagged networks (best-effort).
+    pub tagged_vlan_ids: Vec<u16>,
+    /// Resolved display names of explicitly tagged networks (best-effort).
+    pub tagged_network_names: Vec<String>,
+    /// Whether the trunk carries all tagged VLANs (UniFi "tagged_vlan_mgmt=auto").
+    pub tagged_all: bool,
+    /// Configured PoE mode, if the port supports PoE.
+    pub poe_mode: Option<PoeMode>,
+    /// Configured link speed setting.
+    pub speed_setting: Option<PortSpeedSetting>,
+    /// Current negotiated link speed in Mbps, from live state.
+    pub link_speed_mbps: Option<u32>,
+    /// STP state reported by the switch.
+    pub stp_state: StpState,
+    /// Reference to a named port profile (portconf), if one is applied.
+    pub port_profile_id: Option<String>,
+}
+
 /// Radio on an access point.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Radio {

@@ -33,7 +33,8 @@ pub use site::Site;
 
 // Device
 pub use device::{
-    Device, DeviceState, DeviceStats, DeviceType, PoeInfo, Port, PortConnector, PortState, Radio,
+    Device, DeviceState, DeviceStats, DeviceType, PoeInfo, PoeMode, Port, PortConnector, PortMode,
+    PortProfile, PortSpeedSetting, PortState, Radio, StpState,
 };
 
 // Client
