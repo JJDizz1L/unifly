@@ -305,13 +305,20 @@ impl Controller {
                             let session_client: Client = Client::from((*session_client).clone());
                             client.wireless = session_client.wireless;
                         }
+                        // Match `convert/client.rs`'s default: an absent
+                        // `is_wired` means wireless, not wired.
+                        let session_is_wired = session_client.is_wired.unwrap_or(false);
                         if client.uplink_device_mac.is_none() {
-                            let uplink = if session_client.is_wired.unwrap_or(true) {
+                            let uplink = if session_is_wired {
                                 session_client.sw_mac.as_deref()
                             } else {
                                 session_client.ap_mac.as_deref()
                             };
                             client.uplink_device_mac = uplink.map(MacAddress::new);
+                        }
+                        if client.switch_port.is_none() && session_is_wired {
+                            client.switch_port =
+                                session_client.sw_port.and_then(|p| u32::try_from(p).ok());
                         }
                         merged += 1;
                     }
@@ -375,13 +382,23 @@ impl Controller {
                         if device.wan_ipv6.is_none() {
                             device.wan_ipv6 = parse_session_device_wan_ipv6(&legacy_device.extra);
                         }
-                        if device.ports.is_empty() || device.radios.is_empty() {
+                        if device.ports.is_empty()
+                            || device.radios.is_empty()
+                            || device.uplink_device_mac.is_none()
+                            || device.uplink_port_idx.is_none()
+                        {
                             let session_dev: Device = Device::from((*legacy_device).clone());
                             if device.ports.is_empty() && !session_dev.ports.is_empty() {
                                 device.ports = session_dev.ports;
                             }
                             if device.radios.is_empty() && !session_dev.radios.is_empty() {
                                 device.radios = session_dev.radios;
+                            }
+                            if device.uplink_device_mac.is_none() {
+                                device.uplink_device_mac = session_dev.uplink_device_mac;
+                            }
+                            if device.uplink_port_idx.is_none() {
+                                device.uplink_port_idx = session_dev.uplink_port_idx;
                             }
                         }
                     }

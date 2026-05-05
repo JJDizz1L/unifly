@@ -1,9 +1,31 @@
 use std::sync::Arc;
 
+use serde::Serialize;
 use tabled::Tabled;
-use unifly_api::{Device, PoeMode, PortMode, PortProfile, PortSpeedSetting, PortState, StpState};
+use unifly_api::{
+    Client, Device, PoeMode, PortMode, PortProfile, PortSpeedSetting, PortState, StpState,
+};
 
 use crate::cli::output::Painter;
+
+/// What kind of entity is plugged into a switch port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum ConnectionKind {
+    /// End-user wired client from `/stat/sta`.
+    Client,
+    /// Adopted device (AP, downstream switch) uplinked to this port.
+    Device,
+}
+
+impl ConnectionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ConnectionKind::Client => "client",
+            ConnectionKind::Device => "device",
+        }
+    }
+}
 
 #[derive(Tabled)]
 pub(super) struct DeviceRow {
@@ -326,6 +348,256 @@ pub(super) fn device_tag_identity(value: &serde_json::Value) -> String {
         .to_owned()
 }
 
+// ── Port enrichment with connected entities (`--with-clients`) ─────
+
+/// One end-user client or adopted device currently observed on a switch
+/// port. `kind` discriminates: `"client"` for end-user wired clients
+/// (from `/stat/sta`), `"device"` for adopted devices uplinked to this
+/// port (APs, downstream switches).
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ConnectionSummary {
+    pub kind: ConnectionKind,
+    pub mac: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vlan_id: Option<u16>,
+}
+
+/// `PortProfile` plus all entities seen uplinked to it.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct EnrichedPortProfile {
+    #[serde(flatten)]
+    pub profile: PortProfile,
+    pub connections: Vec<ConnectionSummary>,
+}
+
+#[derive(Tabled)]
+pub(super) struct EnrichedPortRow {
+    #[tabled(rename = "#")]
+    index: String,
+    #[tabled(rename = "Name")]
+    name: String,
+    #[tabled(rename = "Link")]
+    link: String,
+    #[tabled(rename = "Mode")]
+    mode: String,
+    #[tabled(rename = "Native VLAN")]
+    native: String,
+    #[tabled(rename = "Tagged VLANs")]
+    tagged: String,
+    #[tabled(rename = "PoE")]
+    poe: String,
+    #[tabled(rename = "Speed")]
+    speed: String,
+    #[tabled(rename = "STP")]
+    stp: String,
+    /// Format: `<clients>/<devices>: <first-name>` (or `-` if both are zero).
+    #[tabled(rename = "Conns")]
+    conns: String,
+}
+
+pub(super) fn enriched_port_row(
+    enriched: &EnrichedPortProfile,
+    painter: &Painter,
+) -> EnrichedPortRow {
+    let base = port_row(&enriched.profile, painter);
+    EnrichedPortRow {
+        index: base.index,
+        name: base.name,
+        link: base.link,
+        mode: base.mode,
+        native: base.native,
+        tagged: base.tagged,
+        poe: base.poe,
+        speed: base.speed,
+        stp: base.stp,
+        conns: painter.muted(&format_conn_count(&enriched.connections)),
+    }
+}
+
+fn format_conn_count(conns: &[ConnectionSummary]) -> String {
+    if conns.is_empty() {
+        return "-".into();
+    }
+    let clients = conns
+        .iter()
+        .filter(|c| c.kind == ConnectionKind::Client)
+        .count();
+    let devices = conns
+        .iter()
+        .filter(|c| c.kind == ConnectionKind::Device)
+        .count();
+    let head = conns[0].name.as_deref().unwrap_or(conns[0].mac.as_str());
+    if conns.len() == 1 {
+        format!("{clients}/{devices}: {head}")
+    } else {
+        format!("{clients}/{devices}: {head}, …")
+    }
+}
+
+/// Walk both snapshots, keep only entries uplinked to `device_mac`,
+/// and group them by switch port. Returned values include every field
+/// either consumer needs; `build_last_seen_markers` ignores the
+/// fields it doesn't render.
+fn group_connections_by_port(
+    clients: &[Arc<Client>],
+    devices: &[Arc<Device>],
+    device_mac: &unifly_api::MacAddress,
+) -> std::collections::HashMap<u32, Vec<ConnectionSummary>> {
+    use std::collections::HashMap;
+
+    let mut by_port: HashMap<u32, Vec<ConnectionSummary>> = HashMap::new();
+
+    for client in clients {
+        let Some(uplink) = client.uplink_device_mac.as_ref() else {
+            continue;
+        };
+        if uplink.as_str() != device_mac.as_str() {
+            continue;
+        }
+        let Some(port) = client.switch_port else {
+            continue;
+        };
+        by_port.entry(port).or_default().push(ConnectionSummary {
+            kind: ConnectionKind::Client,
+            mac: client.mac.to_string(),
+            ip: client.ip.map(|ip| ip.to_string()),
+            name: client.name.clone().or_else(|| client.hostname.clone()),
+            vlan_id: client.vlan,
+        });
+    }
+
+    for device in devices {
+        let Some(uplink) = device.uplink_device_mac.as_ref() else {
+            continue;
+        };
+        if uplink.as_str() != device_mac.as_str() {
+            continue;
+        }
+        let Some(port) = device.uplink_port_idx else {
+            continue;
+        };
+        by_port.entry(port).or_default().push(ConnectionSummary {
+            kind: ConnectionKind::Device,
+            mac: device.mac.to_string(),
+            ip: device.ip.map(|ip| ip.to_string()),
+            name: device.name.clone(),
+            vlan_id: None,
+        });
+    }
+
+    for entries in by_port.values_mut() {
+        // Stable ordering: clients before devices, then by MAC.
+        entries.sort_by(|a, b| {
+            (a.kind.as_str(), a.mac.as_str()).cmp(&(b.kind.as_str(), b.mac.as_str()))
+        });
+    }
+
+    by_port
+}
+
+/// Pair each port profile with the clients and adopted devices observed
+/// on it. `device_mac` filters both snapshots to this switch.
+pub(super) fn enrich_with_connections(
+    profiles: &[PortProfile],
+    clients: &[Arc<Client>],
+    devices: &[Arc<Device>],
+    device_mac: &unifly_api::MacAddress,
+) -> Vec<EnrichedPortProfile> {
+    let mut by_port = group_connections_by_port(clients, devices, device_mac);
+    profiles
+        .iter()
+        .cloned()
+        .map(|profile| {
+            let connections = by_port.remove(&profile.index).unwrap_or_default();
+            EnrichedPortProfile {
+                profile,
+                connections,
+            }
+        })
+        .collect()
+}
+
+// ── ports-export --with-clients marker injection ───────────────────
+
+/// Build a per-port-index map of `// last-seen ...` comment lines
+/// suitable for injection into the JSONC output of `ports-export`.
+///
+/// Marker format: `// last-seen <ts>: <mac> (<name>, <kind>)` for known
+/// names, or `// last-seen <ts>: <mac> (<kind>)` when the controller has
+/// no display name. The trailing `, <kind>` is unambiguous and keeps
+/// `// last-seen ` (trailing space) as the stable parse anchor for any
+/// future in-place refresh tooling.
+///
+/// `timestamp` is shared across all entries (one timestamp per export
+/// run, for diff stability). Within a port, clients sort before devices
+/// then by MAC.
+pub(super) fn build_last_seen_markers(
+    clients: &[Arc<Client>],
+    devices: &[Arc<Device>],
+    device_mac: &unifly_api::MacAddress,
+    timestamp: &str,
+) -> std::collections::HashMap<u32, Vec<String>> {
+    group_connections_by_port(clients, devices, device_mac)
+        .into_iter()
+        .map(|(port, entries)| {
+            let lines = entries
+                .into_iter()
+                .map(|conn| {
+                    let kind = conn.kind.as_str();
+                    match conn.name {
+                        Some(n) => {
+                            format!("// last-seen {timestamp}: {} ({n}, {kind})", conn.mac)
+                        }
+                        None => format!("// last-seen {timestamp}: {} ({kind})", conn.mac),
+                    }
+                })
+                .collect();
+            (port, lines)
+        })
+        .collect()
+}
+
+/// Inject `// last-seen ...` comment lines into `serde_json::to_string_pretty`
+/// output. Looks for each port object's opening `{` (detected by an
+/// immediately-following `"index": N,` field) and prepends the matching
+/// markers at the same indent.
+pub(super) fn inject_last_seen_markers(
+    pretty_json: &str,
+    markers: &std::collections::HashMap<u32, Vec<String>>,
+) -> String {
+    let lines: Vec<&str> = pretty_json.lines().collect();
+    let mut out = String::with_capacity(pretty_json.len());
+
+    for i in 0..lines.len() {
+        let line = lines[i];
+        if line.trim_end().ends_with('{')
+            && let Some(next) = lines.get(i + 1)
+            && let Some(idx) = parse_index_field(next.trim_start())
+            && let Some(comments) = markers.get(&idx)
+        {
+            let indent_len = line.len() - line.trim_start().len();
+            let indent = &line[..indent_len];
+            for comment in comments {
+                out.push_str(indent);
+                out.push_str(comment);
+                out.push('\n');
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn parse_index_field(s: &str) -> Option<u32> {
+    s.strip_prefix("\"index\":")
+        .and_then(|rest| rest.trim_start().trim_end_matches(',').trim().parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{pending_device_identity, pending_device_row};
@@ -383,5 +655,96 @@ mod tests {
             "ipAddress": "10.0.0.20"
         }));
         assert_eq!(identity, "aa:bb:cc:dd:ee:ff");
+    }
+
+    #[test]
+    fn inject_last_seen_prepends_markers_at_port_indent() {
+        use std::collections::HashMap;
+
+        use super::inject_last_seen_markers;
+
+        let pretty = "{
+  \"ports\": [
+    {
+      \"index\": 1,
+      \"name\": \"uplink\"
+    },
+    {
+      \"index\": 9,
+      \"name\": \"mac-mini\"
+    }
+  ]
+}";
+        let mut markers: HashMap<u32, Vec<String>> = HashMap::new();
+        markers.insert(
+            9,
+            vec!["// last-seen 2026-05-01T14:22Z: aa:bb:cc:dd:ee:ff (Mac Mini)".into()],
+        );
+
+        let out = inject_last_seen_markers(pretty, &markers);
+        // Marker is inserted before the port-9 `{`, at the same indent.
+        let expected = "{
+  \"ports\": [
+    {
+      \"index\": 1,
+      \"name\": \"uplink\"
+    },
+    // last-seen 2026-05-01T14:22Z: aa:bb:cc:dd:ee:ff (Mac Mini)
+    {
+      \"index\": 9,
+      \"name\": \"mac-mini\"
+    }
+  ]
+}
+";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn inject_last_seen_emits_one_line_per_connection() {
+        use std::collections::HashMap;
+
+        use super::inject_last_seen_markers;
+
+        let pretty = "{
+  \"ports\": [
+    {
+      \"index\": 12,
+      \"name\": \"trunk\"
+    }
+  ]
+}";
+        let mut markers: HashMap<u32, Vec<String>> = HashMap::new();
+        markers.insert(
+            12,
+            vec![
+                "// last-seen 2026-05-01T14:22Z: 11:22:33:44:55:66 (sonos, client)".into(),
+                "// last-seen 2026-05-01T14:22Z: aa:bb:cc:dd:ee:ff (U7-Pro, device)".into(),
+            ],
+        );
+        let out = inject_last_seen_markers(pretty, &markers);
+        assert!(out.contains("11:22:33:44:55:66 (sonos, client)"));
+        assert!(out.contains("aa:bb:cc:dd:ee:ff (U7-Pro, device)"));
+        let sonos_pos = out.find("11:22:33:44:55:66").expect("marker present");
+        let port_pos = out.find("\"index\": 12").expect("port object present");
+        assert!(sonos_pos < port_pos);
+    }
+
+    #[test]
+    fn inject_last_seen_is_noop_when_port_has_no_markers() {
+        use std::collections::HashMap;
+
+        use super::inject_last_seen_markers;
+
+        let pretty = "{
+  \"ports\": [
+    {
+      \"index\": 1
+    }
+  ]
+}";
+        let markers: HashMap<u32, Vec<String>> = HashMap::new();
+        let out = inject_last_seen_markers(pretty, &markers);
+        assert_eq!(out, format!("{pretty}\n"));
     }
 }

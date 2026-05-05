@@ -98,6 +98,38 @@ pub enum DevicesCommand {
     Ports {
         /// Device ID (UUID) or MAC address
         device: String,
+
+        /// Include the wired clients and adopted devices (APs, downstream
+        /// switches) currently observed on each port. Adds a `connections`
+        /// array in JSON output (with a `kind` discriminator per entry —
+        /// `"client"` or `"device"`) and a `Conns` count column
+        /// (`<clients>/<devices>`) in the table view.
+        #[arg(long)]
+        with_clients: bool,
+    },
+
+    /// Export switch port configuration as JSONC for `port-set --from-file`
+    ///
+    /// Sparse by default — only ports with active overrides are emitted.
+    /// Pass `--all` to emit every port at its current state (useful for
+    /// first-time bootstrapping a config file).
+    PortsExport {
+        /// Device ID (UUID) or MAC address
+        device: String,
+
+        /// Emit every port, including those without an override entry
+        #[arg(long)]
+        all: bool,
+
+        /// Annotate each port with `// last-seen <ISO8601>: <mac> (<name>, <kind>)`
+        /// comments for currently-connected wired clients and adopted
+        /// devices. `<kind>` is `client` or `device`. Useful for drift
+        /// detection — the comment block records what was observed on
+        /// each labelled port at export time. The marker prefix
+        /// `// last-seen ` is a stable parse anchor (don't hand-edit
+        /// those lines).
+        #[arg(long)]
+        with_clients: bool,
     },
 
     /// Configure a switch port (session API)
@@ -105,33 +137,58 @@ pub enum DevicesCommand {
         /// Device ID (UUID) or MAC address
         device: String,
 
-        /// Port index to configure (1-based)
-        #[arg(value_name = "PORT_IDX")]
-        port: u32,
+        /// Port index to configure (1-based). Required for single-port
+        /// updates; mutually exclusive with `--from-file` (which scopes
+        /// to the `index` of each entry in the file).
+        #[arg(
+            value_name = "PORT_IDX",
+            required_unless_present = "from_file",
+            conflicts_with = "from_file"
+        )]
+        port: Option<u32>,
 
         /// Operational mode
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with_all = ["from_file", "reset"])]
         mode: Option<PortModeArg>,
 
         /// Native (untagged) VLAN: network name or session _id
-        #[arg(long, value_name = "NETWORK")]
+        #[arg(long, value_name = "NETWORK", conflicts_with_all = ["from_file", "reset"])]
         native_vlan: Option<String>,
 
         /// Comma-separated list of tagged VLAN networks (names or session _ids)
-        #[arg(long, value_name = "NETWORK,...", value_delimiter = ',')]
+        #[arg(
+            long,
+            value_name = "NETWORK,...",
+            value_delimiter = ',',
+            conflicts_with_all = ["from_file", "reset"]
+        )]
         tagged_vlans: Option<Vec<String>>,
 
         /// User-facing port label
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["from_file", "reset"])]
         name: Option<String>,
 
         /// PoE mode for this port
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with_all = ["from_file", "reset"])]
         poe: Option<PoeArg>,
 
         /// Configured link speed
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with_all = ["from_file", "reset"])]
         speed: Option<SpeedArg>,
+
+        /// Apply a multi-port configuration from a JSONC file
+        /// (`{"ports": [{"index": N, ...}, ...]}`). Splice semantics:
+        /// ports not listed are left untouched. Per-port `"reset": true`
+        /// removes that port's override entry.
+        #[arg(long, short = 'F', value_name = "FILE")]
+        from_file: Option<std::path::PathBuf>,
+
+        /// Remove this port's `port_overrides` entry, returning it to
+        /// controller defaults. Mutually exclusive with the per-field
+        /// flags above. Equivalent to applying
+        /// `{"ports": [{"index": <PORT_IDX>, "reset": true}]}` via `-F`.
+        #[arg(long, conflicts_with = "from_file")]
+        reset: bool,
     },
 }
 

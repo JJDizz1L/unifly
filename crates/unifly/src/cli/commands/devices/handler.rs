@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use unifly_api::{
-    Command as CoreCommand, Controller, Device, MacAddress, PoeMode, PortMode, PortProfileUpdate,
-    PortSpeedSetting,
+    ApplyPortEntry, ApplyPortsRequest, Command as CoreCommand, Controller, Device, MacAddress,
+    PoeMode, PortMode, PortProfileUpdate, PortSpeedSetting,
 };
 
 use crate::cli::args::{DevicesArgs, DevicesCommand, GlobalOpts, PoeArg, PortModeArg, SpeedArg};
@@ -11,7 +11,8 @@ use crate::cli::error::CliError;
 use crate::cli::output;
 
 use super::render::{
-    detail, device_row, device_tag_identity, device_tag_row, pending_device_identity,
+    build_last_seen_markers, detail, device_row, device_tag_identity, device_tag_row,
+    enrich_with_connections, enriched_port_row, inject_last_seen_markers, pending_device_identity,
     pending_device_row, port_row, stats_detail,
 };
 
@@ -213,19 +214,16 @@ pub(super) async fn handle(
             Ok(())
         }
 
-        DevicesCommand::Ports { device } => {
-            util::ensure_session_access(controller, "devices ports").await?;
-            let mac = util::resolve_device_mac(controller, &device)?;
-            let profiles = controller.list_device_ports(&mac).await?;
-            let out = output::render_list(
-                &global.output,
-                &profiles,
-                |profile| port_row(profile, &painter),
-                |profile| profile.index.to_string(),
-            );
-            output::print_output(&out, global.quiet);
-            Ok(())
-        }
+        DevicesCommand::Ports {
+            device,
+            with_clients,
+        } => handle_ports(controller, global, &painter, &device, with_clients).await,
+
+        DevicesCommand::PortsExport {
+            device,
+            all,
+            with_clients,
+        } => handle_ports_export(controller, &device, all, with_clients).await,
 
         DevicesCommand::PortSet {
             device,
@@ -236,11 +234,13 @@ pub(super) async fn handle(
             name,
             poe,
             speed,
+            from_file,
+            reset,
         } => {
-            handle_port_set(
+            dispatch_port_set(
                 controller,
                 global,
-                &device,
+                device,
                 port,
                 mode,
                 native_vlan,
@@ -248,9 +248,55 @@ pub(super) async fn handle(
                 name,
                 poe,
                 speed,
+                from_file,
+                reset,
             )
             .await
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_port_set(
+    controller: &Controller,
+    global: &GlobalOpts,
+    device: String,
+    port: Option<u32>,
+    mode: Option<PortModeArg>,
+    native_vlan: Option<String>,
+    tagged_vlans: Option<Vec<String>>,
+    name: Option<String>,
+    poe: Option<PoeArg>,
+    speed: Option<SpeedArg>,
+    from_file: Option<std::path::PathBuf>,
+    reset: bool,
+) -> Result<(), CliError> {
+    if let Some(path) = from_file {
+        handle_port_set_from_file(controller, global, &device, &path).await
+    } else if reset {
+        let port = port.ok_or_else(|| CliError::Validation {
+            field: "port-set".into(),
+            reason: "PORT_IDX is required for --reset".into(),
+        })?;
+        handle_port_reset(controller, global, &device, port).await
+    } else {
+        let port = port.ok_or_else(|| CliError::Validation {
+            field: "port-set".into(),
+            reason: "PORT_IDX is required (or pass --from-file)".into(),
+        })?;
+        handle_port_set(
+            controller,
+            global,
+            &device,
+            port,
+            mode,
+            native_vlan,
+            tagged_vlans,
+            name,
+            poe,
+            speed,
+        )
+        .await
     }
 }
 
@@ -313,6 +359,149 @@ async fn handle_port_set(
     controller.update_device_port(&mac, port, &update).await?;
     if !global.quiet {
         eprintln!("Port {port} updated on device {device}");
+    }
+    Ok(())
+}
+
+async fn handle_ports(
+    controller: &Controller,
+    global: &GlobalOpts,
+    painter: &output::Painter,
+    device: &str,
+    with_clients: bool,
+) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "devices ports").await?;
+    let mac = util::resolve_device_mac(controller, device)?;
+    let profiles = controller.list_device_ports(&mac).await?;
+    if with_clients {
+        let clients = controller.clients_snapshot();
+        let devices = controller.devices_snapshot();
+        let enriched = enrich_with_connections(&profiles, &clients, &devices, &mac);
+        let out = output::render_list(
+            &global.output,
+            &enriched,
+            |port| enriched_port_row(port, painter),
+            |port| port.profile.index.to_string(),
+        );
+        output::print_output(&out, global.quiet);
+    } else {
+        let out = output::render_list(
+            &global.output,
+            &profiles,
+            |profile| port_row(profile, painter),
+            |profile| profile.index.to_string(),
+        );
+        output::print_output(&out, global.quiet);
+    }
+    Ok(())
+}
+
+async fn handle_ports_export(
+    controller: &Controller,
+    device: &str,
+    all: bool,
+    with_clients: bool,
+) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "devices ports-export").await?;
+    let mac = util::resolve_device_mac(controller, device)?;
+
+    let request = controller.export_device_ports(&mac, all).await?;
+    let json = serde_json::to_string_pretty(&request)?;
+    let output = if with_clients {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%MZ").to_string();
+        let clients = controller.clients_snapshot();
+        let devices = controller.devices_snapshot();
+        let markers = build_last_seen_markers(&clients, &devices, &mac, &timestamp);
+        inject_last_seen_markers(&json, &markers)
+    } else {
+        let mut s = json;
+        s.push('\n');
+        s
+    };
+    print!("{output}");
+    Ok(())
+}
+
+async fn handle_port_reset(
+    controller: &Controller,
+    global: &GlobalOpts,
+    device: &str,
+    port: u32,
+) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "devices port-set --reset").await?;
+    let mac = util::resolve_device_mac(controller, device)?;
+    if !util::confirm(
+        &format!("Reset port {port} on {device} to controller defaults?"),
+        global.yes,
+    )? {
+        return Ok(());
+    }
+    let request = ApplyPortsRequest {
+        ports: vec![ApplyPortEntry {
+            index: port,
+            reset: true,
+            ..ApplyPortEntry::default()
+        }],
+    };
+    let summary = controller.apply_device_ports(&mac, &request).await?;
+    if !global.quiet {
+        if summary.reset > 0 {
+            eprintln!("Port {port} override removed on device {device}");
+        } else {
+            eprintln!("Port {port} had no override on device {device} (no change)");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_port_set_from_file(
+    controller: &Controller,
+    global: &GlobalOpts,
+    device: &str,
+    path: &std::path::Path,
+) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "devices port-set --from-file").await?;
+    let mac = util::resolve_device_mac(controller, device)?;
+
+    let request: ApplyPortsRequest = serde_json::from_value(util::read_json_file(path)?)?;
+    if request.ports.is_empty() {
+        return Err(CliError::Validation {
+            field: "ports".into(),
+            reason: "ports array is empty; nothing to apply".into(),
+        });
+    }
+
+    // Mirror the confirmation guard the single-port `--reset` path uses
+    // (see `handle_port_reset`). A from-file batch can wipe overrides on
+    // many ports at once via `"reset": true` entries; without this
+    // prompt a misapplied JSONC silently rewrites a production switch.
+    let n_ports = request.ports.len();
+    let n_resets = request.ports.iter().filter(|p| p.reset).count();
+    let summary_label = if n_resets > 0 {
+        format!("{n_ports} port override(s), including {n_resets} reset(s)")
+    } else {
+        format!("{n_ports} port override(s)")
+    };
+    if !util::confirm(
+        &format!("Apply {summary_label} to device {device}?"),
+        global.yes,
+    )? {
+        return Ok(());
+    }
+
+    let summary = controller.apply_device_ports(&mac, &request).await?;
+    if !global.quiet {
+        let plural_applied = if summary.applied == 1 { "" } else { "s" };
+        let plural_reset = if summary.reset == 1 { "" } else { "s" };
+        eprintln!(
+            "Applied {applied} port override{plural_applied}{maybe_reset} on device {device}",
+            applied = summary.applied,
+            maybe_reset = if summary.reset > 0 {
+                format!(", reset {} port{plural_reset}", summary.reset)
+            } else {
+                String::new()
+            },
+        );
     }
     Ok(())
 }
