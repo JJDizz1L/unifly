@@ -33,6 +33,10 @@
   <a href="#-development">Development</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/tui-tour.gif" alt="unifly TUI animated tour — Dashboard, Devices, Clients, Firewall, Topology, and Stats screens" width="900">
+</p>
+
 ---
 
 ## 💜 What is unifly?
@@ -294,7 +298,7 @@ aggregation, Site Manager host switching, and Session-only live features are
 still outside the TUI surface today.
 
 <p align="center">
-  <img src="docs/static/img/dashboard.png" alt="unifly tui dashboard" width="900">
+  <img src="docs/images/tui-dashboard.png" alt="unifly TUI — Dashboard screen with WAN traffic chart, gateway info, CPU/MEM gauges, top clients, and recent events" width="900">
 </p>
 
 | Screen         | Highlights                                                                                       |
@@ -310,9 +314,52 @@ still outside the TUI surface today.
 | **Settings**   | Profile switching, theme selector, display preferences                                           |
 | **Onboarding** | First-run setup wizard                                                                           |
 
+### ✦ Gallery
+
+**Devices** — model, firmware, uptime, and live CPU/MEM
+
 <p align="center">
-  <img src="docs/static/img/devices.png" alt="unifly tui devices" width="900">
-  <img src="docs/static/img/clients.png" alt="unifly tui clients" width="900">
+  <img src="docs/images/tui-devices.png" alt="unifly TUI — Devices screen with status, model, firmware, uptime, and CPU/MEM columns" width="900">
+</p>
+
+**Clients** — all clients (left) and wireless-only filter (right)
+
+<p align="center">
+  <img src="docs/images/tui-clients.png" alt="unifly TUI — Clients screen, all clients" width="440">
+  <img src="docs/images/tui-clients-wireless.png" alt="unifly TUI — Clients screen, wireless filter" width="440">
+</p>
+
+**Wi-Fi observability** — per-client experience, signal, AP, TX/RX
+
+<p align="center">
+  <img src="docs/images/tui-wifi-clients.png" alt="unifly TUI — Wi-Fi screen Clients tab with AP, signal, health, and TX/RX" width="900">
+</p>
+
+**Firewall** — policies, zones, ACL, and NAT across four sub-tabs
+
+<p align="center">
+  <img src="docs/images/tui-firewall.png" alt="unifly TUI — Firewall screen showing policies and zones" width="900">
+</p>
+
+**Topology** — full view (left) and zoomed-in detail (right)
+
+<p align="center">
+  <img src="docs/images/tui-topology.png" alt="unifly TUI — Topology screen, fit-to-view" width="440">
+  <img src="docs/images/tui-topology-zoom.png" alt="unifly TUI — Topology screen, zoomed in" width="440">
+</p>
+
+**Stats** — 1 hour, 7 days, and 30 days of WAN bandwidth, clients, and DPI
+
+<p align="center">
+  <img src="docs/images/tui-stats-1h.png" alt="unifly TUI — Stats screen, 1 hour window" width="290">
+  <img src="docs/images/tui-stats-7d.png" alt="unifly TUI — Stats screen, 7 day window" width="290">
+  <img src="docs/images/tui-stats-30d.png" alt="unifly TUI — Stats screen, 30 day window" width="290">
+</p>
+
+**Help overlay** — every keybinding at a glance
+
+<p align="center">
+  <img src="docs/images/tui-help.png" alt="unifly TUI — Help overlay listing all keybindings" width="900">
 </p>
 
 Full keybinding reference and screen details in the [TUI documentation](https://hyperb1iss.github.io/unifly/reference/tui).
