@@ -50,3 +50,7 @@ coverage/
 
 # ── Insta snapshots pending review ──
 *.snap.new
+
+# -- Local agent stuff --
+.claude/
+

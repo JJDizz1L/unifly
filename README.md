@@ -10,14 +10,26 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-1.94+-e135ff?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/Edition-2024-80ffea?style=for-the-badge&logo=rust&logoColor=0a0a0f" alt="Edition 2024">
-  <img src="https://img.shields.io/badge/ratatui-TUI-ff6ac1?style=for-the-badge&logo=gnometerminal&logoColor=white" alt="ratatui">
-  <img src="https://img.shields.io/badge/opaline-Theme-e135ff?style=for-the-badge&logo=rust&logoColor=white" alt="opaline">
-  <img src="https://img.shields.io/badge/tokio-Async-f1fa8c?style=for-the-badge&logo=rust&logoColor=0a0a0f" alt="tokio">
-  <img src="https://img.shields.io/badge/License-Apache--2.0-50fa7b?style=for-the-badge&logo=apache&logoColor=0a0a0f" alt="License">
+  <a href="https://www.rust-lang.org">
+    <img src="https://img.shields.io/badge/Rust-1.94+-e135ff?style=for-the-badge&logo=rust&logoColor=white" alt="Rust 1.94+">
+  </a>
+  <a href="https://doc.rust-lang.org/edition-guide/rust-2024/index.html">
+    <img src="https://img.shields.io/badge/Edition-2024-80ffea?style=for-the-badge&logo=rust&logoColor=0a0a0f" alt="Rust Edition 2024">
+  </a>
+  <a href="https://ratatui.rs">
+    <img src="https://img.shields.io/badge/ratatui-TUI-ff6ac1?style=for-the-badge&logo=gnometerminal&logoColor=white" alt="Built with ratatui">
+  </a>
+  <a href="https://crates.io/crates/opaline">
+    <img src="https://img.shields.io/badge/opaline-Theme-e135ff?style=for-the-badge&logo=rust&logoColor=white" alt="Themed with opaline">
+  </a>
+  <a href="https://tokio.rs">
+    <img src="https://img.shields.io/badge/tokio-Async-f1fa8c?style=for-the-badge&logo=rust&logoColor=0a0a0f" alt="Powered by tokio">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-Apache--2.0-50fa7b?style=for-the-badge&logo=apache&logoColor=0a0a0f" alt="License: Apache-2.0">
+  </a>
   <a href="https://github.com/sponsors/hyperb1iss">
-    <img src="https://img.shields.io/badge/Sponsor-ff6ac1?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor">
+    <img src="https://img.shields.io/badge/Sponsor-ff6ac1?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor on GitHub">
   </a>
 </p>
 
@@ -435,6 +447,20 @@ npx skills add hyperb1iss/unifly -a claude-code     # Target a specific agent
 | **unifly skill**          | Complete CLI reference, command patterns, output formats, automation tips |
 | **Network Manager agent** | Autonomous agent for provisioning, diagnostics, and security audits       |
 | **Reference docs**        | Command reference, UniFi networking concepts, workflow patterns           |
+
+---
+
+## 💜 Sponsor unifly
+
+unifly is indy open source. No VC, no telemetry, no upsells. Built by [@hyperb1iss](https://github.com/hyperb1iss) on real UniFi hardware, with help from a [growing list of contributors](https://github.com/hyperb1iss/unifly/graphs/contributors). Polished until the TUI sings.
+
+If it saved you a trip to the web UI today, **sponsorship is what keeps the polish coming**: new screens, deeper API coverage, faster releases.
+
+<p align="center">
+  <a href="https://github.com/sponsors/hyperb1iss">
+    <img src="https://img.shields.io/badge/Sponsor%20unifly%20on%20GitHub-e135ff?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor hyperb1iss on GitHub">
+  </a>
+</p>
 
 ---
 
