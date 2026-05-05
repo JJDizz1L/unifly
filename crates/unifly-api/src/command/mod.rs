@@ -17,7 +17,7 @@ pub use requests::{
     CreateFirewallZoneRequest, CreateNatPolicyRequest, CreateNetworkRequest,
     CreateRemoteAccessVpnServerRequest, CreateSiteToSiteVpnRequest,
     CreateTrafficMatchingListRequest, CreateVouchersRequest, CreateVpnClientProfileRequest,
-    CreateWifiBroadcastRequest, CreateWireGuardPeerRequest, TrafficFilterSpec,
+    CreateWifiBroadcastRequest, CreateWireGuardPeerRequest, PortSpec, TrafficFilterSpec,
     UpdateAclRuleRequest, UpdateDnsPolicyRequest, UpdateFirewallPolicyRequest,
     UpdateFirewallZoneRequest, UpdateNatPolicyRequest, UpdateNetworkRequest,
     UpdateRemoteAccessVpnServerRequest, UpdateSiteToSiteVpnRequest,
@@ -134,8 +134,8 @@ pub enum Command {
     },
     ReorderFirewallPolicies {
         zone_pair: (EntityId, EntityId),
-        ordered_ids: Vec<EntityId>,
-        after_system: bool,
+        before_system_ids: Vec<EntityId>,
+        after_system_ids: Vec<EntityId>,
     },
     CreateFirewallZone(CreateFirewallZoneRequest),
     UpdateFirewallZone {
@@ -281,6 +281,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum CommandResult {
     Ok,
+    CreatedId(EntityId),
     Device(Device),
     Client(Client),
     Network(Network),

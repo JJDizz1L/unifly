@@ -14,21 +14,26 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
             let (ic, sid) = require_integration(integration, site_id, "CreateFirewallPolicy")?;
             let action_str = match req.action {
                 FirewallAction::Allow => "ALLOW",
-                FirewallAction::Block => "DROP",
+                FirewallAction::Block => "BLOCK",
                 FirewallAction::Reject => "REJECT",
             };
             let source =
-                build_endpoint_json(&req.source_zone_id.to_string(), req.source_filter.as_ref());
+                build_endpoint_json(&req.source_zone_id.to_string(), req.source_filter.as_ref())?;
             let destination = build_endpoint_json(
                 &req.destination_zone_id.to_string(),
                 req.destination_filter.as_ref(),
-            );
+            )?;
             let ip_version = req.ip_version.as_deref().unwrap_or("IPV4_AND_IPV6");
+            let action = if req.action == FirewallAction::Allow {
+                serde_json::json!({ "type": action_str, "allowReturnTraffic": req.allow_return_traffic })
+            } else {
+                serde_json::json!({ "type": action_str })
+            };
             let body = crate::integration_types::FirewallPolicyCreateUpdate {
                 name: req.name,
                 description: req.description,
                 enabled: req.enabled,
-                action: serde_json::json!({ "type": action_str, "allowReturnTraffic": req.allow_return_traffic }),
+                action,
                 source,
                 destination,
                 ip_protocol_scope: serde_json::json!({ "ipVersion": ip_version }),
@@ -37,8 +42,10 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
                 schedule: None,
                 connection_state_filter: req.connection_states,
             };
-            ic.create_firewall_policy(&sid, &body).await?;
-            Ok(CommandResult::Ok)
+            let resp = ic.create_firewall_policy(&sid, &body).await?;
+            Ok(CommandResult::CreatedId(crate::model::EntityId::Uuid(
+                resp.id,
+            )))
         }
         Command::UpdateFirewallPolicy { id, update } => {
             let (ic, sid) = require_integration(integration, site_id, "UpdateFirewallPolicy")?;
@@ -52,7 +59,7 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
                     .and_then(|s| s.zone_id)
                     .map(|u| u.to_string())
                     .unwrap_or_default();
-                build_endpoint_json(&zone_id, Some(spec))
+                build_endpoint_json(&zone_id, Some(spec))?
             } else {
                 serde_json::to_value(&existing.source).unwrap_or_default()
             };
@@ -64,30 +71,43 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
                     .and_then(|d| d.zone_id)
                     .map(|u| u.to_string())
                     .unwrap_or_default();
-                build_endpoint_json(&zone_id, Some(spec))
+                build_endpoint_json(&zone_id, Some(spec))?
             } else {
                 serde_json::to_value(&existing.destination).unwrap_or_default()
             };
 
-            let action = if update.action.is_some() || update.allow_return_traffic.is_some() {
-                let action_type = update.action.map_or_else(
-                    || {
-                        existing
-                            .action
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("ALLOW")
-                            .to_owned()
-                    },
-                    |a| {
-                        match a {
-                            FirewallAction::Allow => "ALLOW",
-                            FirewallAction::Block => "DROP",
-                            FirewallAction::Reject => "REJECT",
-                        }
-                        .to_owned()
-                    },
-                );
+            // Always reconstruct the action payload so that legacy `DROP`
+            // values from older unifly versions are normalized to `BLOCK`
+            // even when the caller did not touch the action field. Echoing
+            // back `existing.action` verbatim would re-send `DROP`, which
+            // the integration API rejects.
+            let action_type: String = if let Some(action) = update.action {
+                match action {
+                    FirewallAction::Allow => "ALLOW",
+                    FirewallAction::Block => "BLOCK",
+                    FirewallAction::Reject => "REJECT",
+                }
+                .to_owned()
+            } else {
+                // Refuse to default to ALLOW if the controller's stored
+                // action shape is unrecognizable. A silent fallback would
+                // promote a Block/Reject policy to Allow on any field-only
+                // update, which is a security-relevant mutation.
+                let existing_type = existing
+                    .action
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| CoreError::ValidationFailed {
+                        message: "existing firewall policy has no recognizable action type; specify --action explicitly".into(),
+                    })?;
+                if existing_type == "DROP" {
+                    "BLOCK".to_owned()
+                } else {
+                    existing_type.to_owned()
+                }
+            };
+
+            let action = if action_type == "ALLOW" {
                 let allow_return = update.allow_return_traffic.unwrap_or_else(|| {
                     existing
                         .action
@@ -97,7 +117,7 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
                 });
                 serde_json::json!({ "type": action_type, "allowReturnTraffic": allow_return })
             } else {
-                existing.action
+                serde_json::json!({ "type": action_type })
             };
 
             let ip_protocol_scope = if let Some(ref version) = update.ip_version {
@@ -163,24 +183,19 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
         }
         Command::ReorderFirewallPolicies {
             zone_pair,
-            ordered_ids,
-            after_system,
+            before_system_ids,
+            after_system_ids,
         } => {
             let (ic, sid) = require_integration(integration, site_id, "ReorderFirewallPolicies")?;
             let source_zone_uuid = require_uuid(&zone_pair.0)?;
             let destination_zone_uuid = require_uuid(&zone_pair.1)?;
-            let uuids: Result<Vec<uuid::Uuid>, _> = ordered_ids.iter().map(require_uuid).collect();
-            let uuids = uuids?;
-            let body = if after_system {
-                crate::integration_types::FirewallPolicyOrdering {
-                    before_system_defined: Vec::new(),
-                    after_system_defined: uuids,
-                }
-            } else {
-                crate::integration_types::FirewallPolicyOrdering {
-                    before_system_defined: uuids,
-                    after_system_defined: Vec::new(),
-                }
+            let before: Result<Vec<uuid::Uuid>, _> =
+                before_system_ids.iter().map(require_uuid).collect();
+            let after: Result<Vec<uuid::Uuid>, _> =
+                after_system_ids.iter().map(require_uuid).collect();
+            let body = crate::integration_types::FirewallPolicyOrdering {
+                before_system_defined: before?,
+                after_system_defined: after?,
             };
             ic.set_firewall_policy_ordering(&sid, &source_zone_uuid, &destination_zone_uuid, &body)
                 .await?;

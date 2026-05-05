@@ -161,35 +161,31 @@ pub(super) async fn handle(
             dst_port,
             states,
             ip_version,
+            after_system,
         } => {
-            let req = if let Some(path) = from_file.as_ref() {
-                serde_json::from_value(util::read_json_file(path)?)?
-            } else {
-                CreateFirewallPolicyRequest {
-                    name: name.unwrap_or_default(),
-                    action: action
-                        .as_ref()
-                        .map_or(unifly_api::model::FirewallAction::Block, map_fw_action),
-                    source_zone_id: EntityId::from(source_zone.unwrap_or_default()),
-                    destination_zone_id: EntityId::from(dest_zone.unwrap_or_default()),
-                    enabled,
-                    logging_enabled: logging,
-                    allow_return_traffic,
-                    description,
-                    ip_version,
-                    connection_states: states,
-                    source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
-                    destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
-                }
-            };
-
-            controller
-                .execute(CoreCommand::CreateFirewallPolicy(req))
-                .await?;
-            if !global.quiet {
-                eprintln!("Firewall policy created");
-            }
-            Ok(())
+            handle_create(
+                controller,
+                global,
+                from_file,
+                name,
+                action,
+                source_zone,
+                dest_zone,
+                enabled,
+                description,
+                logging,
+                allow_return_traffic,
+                src_network,
+                src_ip,
+                src_port,
+                dst_network,
+                dst_ip,
+                dst_port,
+                states,
+                ip_version,
+                after_system,
+            )
+            .await
         }
 
         FirewallPoliciesCommand::Update {
@@ -205,46 +201,22 @@ pub(super) async fn handle(
             states,
             ip_version,
         } => {
-            if from_file.is_none()
-                && allow_return_traffic.is_none()
-                && src_network.is_none()
-                && src_ip.is_none()
-                && src_port.is_none()
-                && dst_network.is_none()
-                && dst_ip.is_none()
-                && dst_port.is_none()
-                && states.is_none()
-                && ip_version.is_none()
-            {
-                return Err(CliError::Validation {
-                    field: "update".into(),
-                    reason: "at least one update flag or --from-file is required".into(),
-                });
-            }
-
-            let update = if let Some(path) = from_file.as_ref() {
-                serde_json::from_value(util::read_json_file(path)?)?
-            } else {
-                UpdateFirewallPolicyRequest {
-                    allow_return_traffic,
-                    source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
-                    destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
-                    connection_states: states,
-                    ip_version,
-                    ..UpdateFirewallPolicyRequest::default()
-                }
-            };
-
-            controller
-                .execute(CoreCommand::UpdateFirewallPolicy {
-                    id: EntityId::from(id),
-                    update,
-                })
-                .await?;
-            if !global.quiet {
-                eprintln!("Firewall policy updated");
-            }
-            Ok(())
+            handle_update(
+                controller,
+                global,
+                id,
+                allow_return_traffic,
+                from_file,
+                src_network,
+                src_ip,
+                src_port,
+                dst_network,
+                dst_ip,
+                dst_port,
+                states,
+                ip_version,
+            )
+            .await
         }
 
         FirewallPoliciesCommand::Patch {
@@ -310,12 +282,65 @@ pub(super) async fn handle(
                 parse_reorder_zone_pair(Some(source_zone.as_str()), Some(dest_zone.as_str()))?;
 
             if let Some(ids) = set {
-                let ordered_ids: Vec<EntityId> = ids.into_iter().map(EntityId::from).collect();
+                let new_ids = ids
+                    .into_iter()
+                    .map(|s| match EntityId::from(s.clone()) {
+                        id @ EntityId::Uuid(_) => Ok(id),
+                        EntityId::Legacy(_) => Err(CliError::Validation {
+                            field: "set".into(),
+                            reason: format!("\"{s}\" is not a valid policy UUID"),
+                        }),
+                    })
+                    .collect::<Result<Vec<EntityId>, _>>()?;
+                let ordering = controller
+                    .get_firewall_policy_ordering(&zone_pair.0, &zone_pair.1)
+                    .await?;
+                let preserved: Vec<EntityId> = if after_system {
+                    ordering
+                        .before_system_defined
+                        .into_iter()
+                        .map(EntityId::Uuid)
+                        .collect()
+                } else {
+                    ordering
+                        .after_system_defined
+                        .into_iter()
+                        .map(EntityId::Uuid)
+                        .collect()
+                };
+
+                // A policy can only live in one half of the ordering at a
+                // time. If the user names an ID that's currently in the
+                // opposite half, treat it as a *move*: drop it from the
+                // preserved list so it ends up only in the target half.
+                // Reporting the move keeps the behavior visible.
+                let new_ids_set: std::collections::HashSet<&EntityId> = new_ids.iter().collect();
+                let preserved_len = preserved.len();
+                let preserved: Vec<EntityId> = preserved
+                    .into_iter()
+                    .filter(|id| !new_ids_set.contains(id))
+                    .collect();
+                let moved = preserved_len - preserved.len();
+                if moved > 0 && !global.quiet {
+                    let from_side = if after_system {
+                        "before-system"
+                    } else {
+                        "after-system"
+                    };
+                    let plural = if moved == 1 { "y" } else { "ies" };
+                    eprintln!("Moved {moved} polic{plural} from {from_side} into the new ordering");
+                }
+
+                let (before_system_ids, after_system_ids) = if after_system {
+                    (preserved, new_ids)
+                } else {
+                    (new_ids, preserved)
+                };
                 controller
                     .execute(CoreCommand::ReorderFirewallPolicies {
                         zone_pair,
-                        ordered_ids,
-                        after_system,
+                        before_system_ids,
+                        after_system_ids,
                     })
                     .await?;
                 if !global.quiet {
@@ -364,4 +389,204 @@ pub(super) async fn handle(
             Ok(())
         }
     }
+}
+
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+async fn handle_create(
+    controller: &Controller,
+    global: &GlobalOpts,
+    from_file: Option<std::path::PathBuf>,
+    name: Option<String>,
+    action: Option<crate::cli::args::FirewallAction>,
+    source_zone: Option<String>,
+    dest_zone: Option<String>,
+    enabled: bool,
+    description: Option<String>,
+    logging: bool,
+    allow_return_traffic: bool,
+    src_network: Option<Vec<String>>,
+    src_ip: Option<Vec<String>>,
+    src_port: Option<Vec<String>>,
+    dst_network: Option<Vec<String>>,
+    dst_ip: Option<Vec<String>>,
+    dst_port: Option<Vec<String>>,
+    states: Option<Vec<String>>,
+    ip_version: Option<String>,
+    after_system: bool,
+) -> Result<(), CliError> {
+    let req = if let Some(path) = from_file.as_ref() {
+        let mut req: CreateFirewallPolicyRequest =
+            serde_json::from_value(util::read_json_file(path)?)?;
+        req.resolve_filters()
+            .map_err(|reason| CliError::Validation {
+                field: "filter".into(),
+                reason,
+            })?;
+        req
+    } else {
+        CreateFirewallPolicyRequest {
+            name: name.unwrap_or_default(),
+            action: action
+                .as_ref()
+                .map_or(unifly_api::model::FirewallAction::Block, map_fw_action),
+            source_zone_id: EntityId::from(source_zone.unwrap_or_default()),
+            destination_zone_id: EntityId::from(dest_zone.unwrap_or_default()),
+            enabled,
+            logging_enabled: logging,
+            allow_return_traffic,
+            description,
+            ip_version,
+            connection_states: states,
+            source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
+            destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
+            src_network: None,
+            src_ip: None,
+            src_port: None,
+            dst_network: None,
+            dst_ip: None,
+            dst_port: None,
+        }
+    };
+
+    let source_zone_id = req.source_zone_id.clone();
+    let destination_zone_id = req.destination_zone_id.clone();
+
+    let result = controller
+        .execute(CoreCommand::CreateFirewallPolicy(req))
+        .await?;
+
+    let created_id = match &result {
+        unifly_api::CommandResult::CreatedId(id) => Some(id.to_string()),
+        _ => None,
+    };
+
+    let reorder_err = if after_system {
+        move_policy_after_system(controller, result, source_zone_id, destination_zone_id)
+            .await
+            .err()
+    } else {
+        None
+    };
+
+    if !global.quiet {
+        match (after_system, &reorder_err, &created_id) {
+            (true, Some(err), Some(id)) => {
+                eprintln!(
+                    "Firewall policy created (id {id}); reorder after system-defined rules failed: {err}"
+                );
+                eprintln!(
+                    "Use `unifly firewall policies reorder --source-zone <ID> --dest-zone <ID> --set ... --after-system` to retry."
+                );
+            }
+            (true, Some(err), None) => {
+                eprintln!(
+                    "Firewall policy created; reorder after system-defined rules failed: {err}"
+                );
+            }
+            (true, None, _) => eprintln!("Firewall policy created (after system-defined rules)"),
+            (false, _, _) => eprintln!("Firewall policy created"),
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_update(
+    controller: &Controller,
+    global: &GlobalOpts,
+    id: String,
+    allow_return_traffic: Option<bool>,
+    from_file: Option<std::path::PathBuf>,
+    src_network: Option<Vec<String>>,
+    src_ip: Option<Vec<String>>,
+    src_port: Option<Vec<String>>,
+    dst_network: Option<Vec<String>>,
+    dst_ip: Option<Vec<String>>,
+    dst_port: Option<Vec<String>>,
+    states: Option<Vec<String>>,
+    ip_version: Option<String>,
+) -> Result<(), CliError> {
+    if from_file.is_none()
+        && allow_return_traffic.is_none()
+        && src_network.is_none()
+        && src_ip.is_none()
+        && src_port.is_none()
+        && dst_network.is_none()
+        && dst_ip.is_none()
+        && dst_port.is_none()
+        && states.is_none()
+        && ip_version.is_none()
+    {
+        return Err(CliError::Validation {
+            field: "update".into(),
+            reason: "at least one update flag or --from-file is required".into(),
+        });
+    }
+
+    let update = if let Some(path) = from_file.as_ref() {
+        let mut update: UpdateFirewallPolicyRequest =
+            serde_json::from_value(util::read_json_file(path)?)?;
+        update
+            .resolve_filters()
+            .map_err(|reason| CliError::Validation {
+                field: "filter".into(),
+                reason,
+            })?;
+        update
+    } else {
+        UpdateFirewallPolicyRequest {
+            allow_return_traffic,
+            source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
+            destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
+            connection_states: states,
+            ip_version,
+            ..UpdateFirewallPolicyRequest::default()
+        }
+    };
+
+    controller
+        .execute(CoreCommand::UpdateFirewallPolicy {
+            id: EntityId::from(id),
+            update,
+        })
+        .await?;
+    if !global.quiet {
+        eprintln!("Firewall policy updated");
+    }
+    Ok(())
+}
+
+/// Move a newly created firewall policy from "Before System Defined" to
+/// "After System Defined" in the zone-pair ordering.
+async fn move_policy_after_system(
+    controller: &Controller,
+    result: unifly_api::CommandResult,
+    source_zone_id: EntityId,
+    destination_zone_id: EntityId,
+) -> Result<(), CliError> {
+    if let unifly_api::CommandResult::CreatedId(created_id) = result {
+        let mut ordering = controller
+            .get_firewall_policy_ordering(&source_zone_id, &destination_zone_id)
+            .await?;
+        if let EntityId::Uuid(uuid) = &created_id {
+            ordering.before_system_defined.retain(|id| id != uuid);
+            ordering.after_system_defined.push(*uuid);
+        }
+        controller
+            .execute(CoreCommand::ReorderFirewallPolicies {
+                zone_pair: (source_zone_id, destination_zone_id),
+                before_system_ids: ordering
+                    .before_system_defined
+                    .into_iter()
+                    .map(EntityId::Uuid)
+                    .collect(),
+                after_system_ids: ordering
+                    .after_system_defined
+                    .into_iter()
+                    .map(EntityId::Uuid)
+                    .collect(),
+            })
+            .await?;
+    }
+    Ok(())
 }
