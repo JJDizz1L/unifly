@@ -16,6 +16,7 @@ use ratatui::style::{Color, Modifier, Style};
 /// Called automatically during [`initialize`]. Tokens are registered with
 /// `register_default_token`, so TOML overrides take priority.
 pub fn derive_tokens(theme: &mut opaline::Theme) {
+    let accent_primary = theme.color(tokens::ACCENT_PRIMARY);
     let accent_secondary = theme.color(tokens::ACCENT_SECONDARY);
     let accent_tertiary = theme.color(tokens::ACCENT_TERTIARY);
 
@@ -26,6 +27,8 @@ pub fn derive_tokens(theme: &mut opaline::Theme) {
     theme.register_default_token("unifly.tx_gradient.end", accent_secondary.darken(0.45));
     theme.register_default_token("unifly.rx_gradient.start", accent_tertiary.darken(0.93));
     theme.register_default_token("unifly.rx_gradient.end", accent_tertiary.darken(0.45));
+    theme.register_default_token("unifly.client_gradient.start", accent_primary.darken(0.93));
+    theme.register_default_token("unifly.client_gradient.end", accent_primary.darken(0.45));
 
     // Chart series — ordered standard tokens for multi-line graphs
     theme.register_default_token("unifly.chart.0", theme.color(tokens::ACCENT_SECONDARY));
@@ -125,6 +128,14 @@ pub fn rx_gradient_endpoints() -> (Color, Color) {
     (
         th.color("unifly.rx_gradient.start").into(),
         th.color("unifly.rx_gradient.end").into(),
+    )
+}
+
+pub fn client_gradient_endpoints() -> (Color, Color) {
+    let th = t();
+    (
+        th.color("unifly.client_gradient.start").into(),
+        th.color("unifly.client_gradient.end").into(),
     )
 }
 

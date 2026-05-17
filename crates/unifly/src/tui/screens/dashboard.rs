@@ -57,7 +57,8 @@ pub struct DashboardScreen {
     display_rx_bps: Option<f64>,
     /// Monotonic sample counter - x-axis value.
     sample_counter: f64,
-    chart_y_max: f64,
+    chart_tx_y_max: f64,
+    chart_rx_y_max: f64,
     last_chart_sample_at: Option<Instant>,
     /// Tracks when we last received a data update (for refresh indicator).
     last_data_update: Option<Instant>,
@@ -87,7 +88,8 @@ impl DashboardScreen {
             display_tx_bps: None,
             display_rx_bps: None,
             sample_counter: 0.0,
-            chart_y_max: 0.0,
+            chart_tx_y_max: 0.0,
+            chart_rx_y_max: 0.0,
             last_chart_sample_at: None,
             last_data_update: None,
         }

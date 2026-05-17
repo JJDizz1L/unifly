@@ -10,7 +10,8 @@ impl StatsScreen {
             period: StatsPeriod::default(),
             bandwidth_tx: Vec::new(),
             bandwidth_rx: Vec::new(),
-            bandwidth_y_max: 0.0,
+            bandwidth_tx_y_max: 0.0,
+            bandwidth_rx_y_max: 0.0,
             client_counts: Vec::new(),
             client_y_max: 0.0,
             dpi_apps: Vec::new(),
@@ -31,7 +32,8 @@ impl StatsScreen {
         match action {
             Action::SetStatsPeriod(period) => {
                 self.period = *period;
-                self.bandwidth_y_max = 0.0;
+                self.bandwidth_tx_y_max = 0.0;
+                self.bandwidth_rx_y_max = 0.0;
                 self.client_y_max = 0.0;
             }
             Action::StatsUpdated(data) => {
@@ -41,15 +43,25 @@ impl StatsScreen {
                 self.dpi_apps.clone_from(&data.dpi_apps);
                 self.dpi_categories.clone_from(&data.dpi_categories);
 
-                let bandwidth_max = self
+                let tx_max = self
                     .bandwidth_tx
                     .iter()
-                    .chain(self.bandwidth_rx.iter())
                     .map(|&(_, value)| value)
                     .fold(0.0_f64, f64::max);
-                self.bandwidth_y_max = axis::stable_upper_bound(
-                    self.bandwidth_y_max,
-                    bandwidth_max,
+                let rx_max = self
+                    .bandwidth_rx
+                    .iter()
+                    .map(|&(_, value)| value)
+                    .fold(0.0_f64, f64::max);
+                self.bandwidth_tx_y_max = axis::stable_upper_bound(
+                    self.bandwidth_tx_y_max,
+                    tx_max,
+                    BANDWIDTH_TICK_COUNT,
+                    MIN_BANDWIDTH_SCALE,
+                );
+                self.bandwidth_rx_y_max = axis::stable_upper_bound(
+                    self.bandwidth_rx_y_max,
+                    rx_max,
                     BANDWIDTH_TICK_COUNT,
                     MIN_BANDWIDTH_SCALE,
                 );
@@ -85,13 +97,15 @@ mod tests {
     #[test]
     fn set_stats_period_resets_axis_bounds() {
         let mut screen = StatsScreen::new();
-        screen.bandwidth_y_max = 42_000.0;
+        screen.bandwidth_tx_y_max = 42_000.0;
+        screen.bandwidth_rx_y_max = 84_000.0;
         screen.client_y_max = 99.0;
 
         screen.apply_action(&Action::SetStatsPeriod(StatsPeriod::SevenDays));
 
         assert_eq!(screen.period, StatsPeriod::SevenDays);
-        assert_eq!(screen.bandwidth_y_max, 0.0);
+        assert_eq!(screen.bandwidth_tx_y_max, 0.0);
+        assert_eq!(screen.bandwidth_rx_y_max, 0.0);
         assert_eq!(screen.client_y_max, 0.0);
     }
 
@@ -100,12 +114,17 @@ mod tests {
         let mut screen = StatsScreen::new();
 
         screen.apply_action(&Action::StatsUpdated(sample_stats_data(120_000.0, 18.0)));
-        let first_bandwidth_max = screen.bandwidth_y_max;
+        let initial_upload_bound = screen.bandwidth_tx_y_max;
+        let initial_download_ceiling = screen.bandwidth_rx_y_max;
         let first_client_max = screen.client_y_max;
 
         assert_eq!(
-            first_bandwidth_max,
+            initial_upload_bound,
             axis::stable_upper_bound(0.0, 120_000.0, BANDWIDTH_TICK_COUNT, MIN_BANDWIDTH_SCALE)
+        );
+        assert_eq!(
+            initial_download_ceiling,
+            axis::stable_upper_bound(0.0, 60_000.0, BANDWIDTH_TICK_COUNT, MIN_BANDWIDTH_SCALE)
         );
         assert_eq!(
             first_client_max,
@@ -115,10 +134,19 @@ mod tests {
         screen.apply_action(&Action::StatsUpdated(sample_stats_data(40_000.0, 8.0)));
 
         assert_eq!(
-            screen.bandwidth_y_max,
+            screen.bandwidth_tx_y_max,
             axis::stable_upper_bound(
-                first_bandwidth_max,
+                initial_upload_bound,
                 40_000.0,
+                BANDWIDTH_TICK_COUNT,
+                MIN_BANDWIDTH_SCALE
+            )
+        );
+        assert_eq!(
+            screen.bandwidth_rx_y_max,
+            axis::stable_upper_bound(
+                initial_download_ceiling,
+                20_000.0,
                 BANDWIDTH_TICK_COUNT,
                 MIN_BANDWIDTH_SCALE
             )
@@ -127,5 +155,17 @@ mod tests {
             screen.client_y_max,
             axis::stable_upper_bound(first_client_max, 8.0, CLIENT_TICK_COUNT, 1.0)
         );
+    }
+
+    #[test]
+    fn stats_bandwidth_bounds_do_not_share_rx_spikes() {
+        let mut screen = StatsScreen::new();
+        let mut data = sample_stats_data(20_000.0, 4.0);
+        data.bandwidth_rx = vec![(1.0, 2_000_000.0)];
+
+        screen.apply_action(&Action::StatsUpdated(data));
+
+        assert!(screen.bandwidth_rx_y_max > screen.bandwidth_tx_y_max);
+        assert!(screen.bandwidth_tx_y_max < 1_000_000.0);
     }
 }

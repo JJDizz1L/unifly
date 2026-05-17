@@ -43,27 +43,27 @@ impl DashboardScreen {
             self.bandwidth_rx.remove(0);
         }
 
-        let visible_max = self.bandwidth_scale_reference();
-        self.chart_y_max = axis::stable_upper_bound(
-            self.chart_y_max,
-            visible_max,
+        let visible_tx = Self::bandwidth_scale_reference(&self.bandwidth_tx);
+        let visible_rx = Self::bandwidth_scale_reference(&self.bandwidth_rx);
+        self.chart_tx_y_max = axis::stable_upper_bound(
+            self.chart_tx_y_max,
+            visible_tx,
+            BANDWIDTH_TICK_COUNT,
+            MIN_BANDWIDTH_SCALE,
+        );
+        self.chart_rx_y_max = axis::stable_upper_bound(
+            self.chart_rx_y_max,
+            visible_rx,
             BANDWIDTH_TICK_COUNT,
             MIN_BANDWIDTH_SCALE,
         );
     }
 
-    pub(super) fn bandwidth_scale_reference(&self) -> f64 {
-        let mut values: Vec<f64> = self
-            .bandwidth_tx
+    pub(super) fn bandwidth_scale_reference(series: &[(f64, f64)]) -> f64 {
+        let mut values: Vec<f64> = series
             .iter()
             .rev()
             .take(BANDWIDTH_SCALE_WINDOW_SAMPLES)
-            .chain(
-                self.bandwidth_rx
-                    .iter()
-                    .rev()
-                    .take(BANDWIDTH_SCALE_WINDOW_SAMPLES),
-            )
             .map(|&(_, value)| value)
             .filter(|value| *value > 0.0)
             .collect();
@@ -76,11 +76,7 @@ impl DashboardScreen {
         let percentile_index =
             ((values.len().saturating_sub(1)) * BANDWIDTH_SCALE_PERCENTILE) / 100;
         let percentile_value = values[percentile_index];
-        let current_value = self
-            .bandwidth_tx
-            .last()
-            .map_or(0.0, |&(_, value)| value)
-            .max(self.bandwidth_rx.last().map_or(0.0, |&(_, value)| value));
+        let current_value = series.last().map_or(0.0, |&(_, value)| value);
 
         percentile_value.max(current_value)
     }
@@ -258,8 +254,18 @@ mod tests {
                 .push((f64::from(idx), f64::from(idx * 500)));
         }
 
-        let reference = screen.bandwidth_scale_reference();
+        let reference = DashboardScreen::bandwidth_scale_reference(&screen.bandwidth_tx);
         assert!(reference >= 4_000.0);
+    }
+
+    #[test]
+    fn bandwidth_scaling_keeps_tx_and_rx_independent() {
+        let mut screen = DashboardScreen::new();
+
+        screen.push_bandwidth_sample(20_000, 2_000_000);
+
+        assert!(screen.chart_rx_y_max > screen.chart_tx_y_max);
+        assert!(screen.chart_tx_y_max < 1_000_000.0);
     }
 
     #[test]

@@ -3,12 +3,15 @@ use ratatui::text::{Line, Span};
 
 use crate::tui::theme;
 use crate::tui::widgets::bytes_fmt;
-use crate::tui::widgets::hyperchart::{Domain, HyperChart, Renderer, Series};
+use crate::tui::widgets::hyperchart::{
+    Baseline, ChartGradient, Domain, FillStyle, HyperChart, Renderer, Series, SeriesData,
+    SeriesDirection, XAxis,
+};
 
 use super::super::DashboardScreen;
 use super::super::{
-    BANDWIDTH_GUTTER_WIDTH, BANDWIDTH_LABEL_WIDTH, BANDWIDTH_TICK_COUNT, LIVE_CHART_WINDOW_SAMPLES,
-    MIN_BANDWIDTH_SCALE,
+    BANDWIDTH_GUTTER_WIDTH, BANDWIDTH_LABEL_WIDTH, BANDWIDTH_TICK_COUNT,
+    LIVE_CHART_SAMPLE_INTERVAL, LIVE_CHART_WINDOW_SAMPLES, MIN_BANDWIDTH_SCALE,
 };
 
 impl DashboardScreen {
@@ -59,25 +62,39 @@ impl DashboardScreen {
         let window_span = LIVE_CHART_WINDOW_SAMPLES.saturating_sub(1) as f64;
         let x_max = self.sample_counter.max(0.0);
         let x_min = x_max - window_span;
-        let y_max = self.chart_y_max.max(MIN_BANDWIDTH_SCALE);
+        let tx_y_max = self.chart_tx_y_max.max(MIN_BANDWIDTH_SCALE);
+        let rx_y_max = self.chart_rx_y_max.max(MIN_BANDWIDTH_SCALE);
+        let (rx_start, rx_end) = theme::rx_gradient_endpoints();
+        let (tx_start, tx_end) = theme::tx_gradient_endpoints();
 
         let series = [
             Series {
                 name: "RX",
-                data: &self.bandwidth_rx,
+                data: SeriesData::Dense(&self.bandwidth_rx),
                 line_color: theme::accent_tertiary(),
-                fill_color: Some(theme::rx_fill()),
+                fill: FillStyle::Gradient(ChartGradient::new(rx_start, rx_end)),
+                direction: SeriesDirection::Up,
             },
             Series {
                 name: "TX",
-                data: &self.bandwidth_tx,
+                data: SeriesData::Dense(&self.bandwidth_tx),
                 line_color: theme::accent_secondary(),
-                fill_color: Some(theme::tx_fill()),
+                fill: FillStyle::Gradient(ChartGradient::new(tx_start, tx_end)),
+                direction: SeriesDirection::Down,
             },
         ];
 
-        let chart = HyperChart::new(title, &series, (x_min, x_max), y_max)
+        let chart = HyperChart::new(title, &series, (x_min, x_max), rx_y_max)
             .domain(Domain::Rate)
+            .x_axis(XAxis::Relative {
+                sample_interval: LIVE_CHART_SAMPLE_INTERVAL,
+            })
+            .baseline(Baseline::Mirror {
+                upper_max: rx_y_max,
+                lower_max: tx_y_max,
+                upper_label: "RX",
+                lower_label: "TX",
+            })
             .tick_count(BANDWIDTH_TICK_COUNT)
             .label_width(BANDWIDTH_LABEL_WIDTH)
             .renderer(Renderer::Canvas {

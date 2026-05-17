@@ -11,7 +11,8 @@ use super::{
 use crate::tui::theme;
 use crate::tui::widgets::bytes_fmt;
 use crate::tui::widgets::hyperchart::{
-    Denominator, Domain, HyperBars, HyperChart, Renderer, Row, Series, ValueFormat,
+    Baseline, ChartGradient, Denominator, Domain, FillStyle, HyperBars, HyperChart, Renderer, Row,
+    Series, SeriesData, SeriesDirection, ValueFormat, XAxis,
 };
 use crate::tui::widgets::sub_tabs;
 
@@ -26,8 +27,11 @@ impl StatsScreen {
         clippy::as_conversions
     )]
     pub(super) fn render_bandwidth_chart(&self, frame: &mut Frame, area: Rect) {
-        let y_max = self.bandwidth_y_max.max(MIN_BANDWIDTH_SCALE);
+        let tx_y_max = self.bandwidth_tx_y_max.max(MIN_BANDWIDTH_SCALE);
+        let rx_y_max = self.bandwidth_rx_y_max.max(MIN_BANDWIDTH_SCALE);
         let x_bounds = bandwidth_x_bounds(&self.bandwidth_tx, &self.bandwidth_rx);
+        let (rx_start, rx_end) = theme::rx_gradient_endpoints();
+        let (tx_start, tx_end) = theme::tx_gradient_endpoints();
 
         let current_tx = self.bandwidth_tx.last().map_or(0, |&(_, v)| v as u64);
         let current_rx = self.bandwidth_rx.last().map_or(0, |&(_, v)| v as u64);
@@ -59,20 +63,29 @@ impl StatsScreen {
         let series = [
             Series {
                 name: "RX",
-                data: &self.bandwidth_rx,
+                data: SeriesData::Dense(&self.bandwidth_rx),
                 line_color: theme::accent_tertiary(),
-                fill_color: Some(theme::rx_fill()),
+                fill: FillStyle::Gradient(ChartGradient::new(rx_start, rx_end)),
+                direction: SeriesDirection::Up,
             },
             Series {
                 name: "TX",
-                data: &self.bandwidth_tx,
+                data: SeriesData::Dense(&self.bandwidth_tx),
                 line_color: theme::accent_secondary(),
-                fill_color: Some(theme::tx_fill()),
+                fill: FillStyle::Gradient(ChartGradient::new(tx_start, tx_end)),
+                direction: SeriesDirection::Down,
             },
         ];
 
-        let chart = HyperChart::new(title, &series, x_bounds, y_max)
+        let chart = HyperChart::new(title, &series, x_bounds, rx_y_max)
             .domain(Domain::Rate)
+            .x_axis(XAxis::Epoch)
+            .baseline(Baseline::Mirror {
+                upper_max: rx_y_max,
+                lower_max: tx_y_max,
+                upper_label: "RX",
+                lower_label: "TX",
+            })
             .tick_count(BANDWIDTH_TICK_COUNT)
             .label_width(BANDWIDTH_LABEL_WIDTH)
             .renderer(Renderer::Canvas {
@@ -93,13 +106,18 @@ impl StatsScreen {
 
         let series = [Series {
             name: "Clients",
-            data: &self.client_counts,
+            data: SeriesData::Dense(&self.client_counts),
             line_color: theme::accent_primary(),
-            fill_color: None,
+            fill: {
+                let (start, end) = theme::client_gradient_endpoints();
+                FillStyle::Gradient(ChartGradient::new(start, end))
+            },
+            direction: SeriesDirection::Up,
         }];
 
         let chart = HyperChart::new(Line::from(" Client Count "), &series, x_bounds, y_max)
             .domain(Domain::Count)
+            .x_axis(XAxis::Epoch)
             .tick_count(CLIENT_TICK_COUNT)
             .label_width(CLIENT_LABEL_WIDTH)
             .renderer(Renderer::Canvas {
