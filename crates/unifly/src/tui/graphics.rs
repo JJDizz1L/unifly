@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, mpsc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
@@ -16,6 +17,7 @@ use crate::tui::render_caps::GraphicsProtocol;
 
 const CHART_CACHE_CAPACITY: usize = 48;
 const CHART_QUEUE_CAPACITY: usize = 8;
+const CHART_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 static PICKER: OnceLock<RwLock<Option<Picker>>> = OnceLock::new();
 static CHARTS: OnceLock<ChartManager> = OnceLock::new();
@@ -70,6 +72,7 @@ struct ChartCache {
     pending: HashSet<ChartImageKey>,
     failed: HashSet<ChartImageKey>,
     order: VecDeque<ChartImageKey>,
+    last_queued_by_slot: HashMap<ChartSlotKey, Instant>,
 }
 
 pub fn probe_stdio() -> GraphicsProtocol {
@@ -170,13 +173,17 @@ pub fn render_cached_chart(
 pub fn queue_chart(
     slot: ChartSlotKey,
     key: ChartImageKey,
-    image: DynamicImage,
     target: Size,
+    build_image: impl FnOnce() -> DynamicImage,
 ) -> bool {
     let Some(picker) = current_picker() else {
         return false;
     };
     let manager = CHARTS.get_or_init(ChartManager::spawn);
+    if !manager.reserve(slot, key) {
+        return false;
+    }
+    let image = build_image();
     manager.queue(ChartRequest {
         slot,
         key,
@@ -262,28 +269,26 @@ impl ChartManager {
         }
     }
 
+    fn reserve(&self, slot: ChartSlotKey, key: ChartImageKey) -> bool {
+        let Ok(mut cache) = self.cache.lock() else {
+            return false;
+        };
+        cache.reserve(slot, key, Instant::now())
+    }
+
     fn queue(&self, request: ChartRequest) -> bool {
         let key = request.key;
-        {
-            let Ok(mut cache) = self.cache.lock() else {
-                return false;
-            };
-            if cache.ready.contains_key(&key) || cache.pending.contains(&key) {
-                return true;
-            }
-            cache.failed.remove(&key);
-        }
-
         match self.tx.try_send(request) {
-            Ok(()) => {
+            Ok(()) => true,
+            Err(mpsc::TrySendError::Full(_)) => {
                 if let Ok(mut cache) = self.cache.lock() {
-                    cache.pending.insert(key);
+                    cache.pending.remove(&key);
                 }
-                true
+                false
             }
-            Err(mpsc::TrySendError::Full(_)) => false,
             Err(mpsc::TrySendError::Disconnected(_)) => {
                 if let Ok(mut cache) = self.cache.lock() {
+                    cache.pending.remove(&key);
                     cache.failed.insert(key);
                 }
                 false
@@ -323,6 +328,29 @@ impl ChartManager {
 }
 
 impl ChartCache {
+    fn reserve(&mut self, slot: ChartSlotKey, key: ChartImageKey, now: Instant) -> bool {
+        if self.ready.contains_key(&key)
+            || self.pending.contains(&key)
+            || self.failed.contains(&key)
+            || self.pending.len() >= CHART_QUEUE_CAPACITY
+        {
+            return false;
+        }
+
+        if self.latest_by_slot.contains_key(&slot)
+            && self
+                .last_queued_by_slot
+                .get(&slot)
+                .is_some_and(|last| now.duration_since(*last) < CHART_MIN_REFRESH_INTERVAL)
+        {
+            return false;
+        }
+
+        self.pending.insert(key);
+        self.last_queued_by_slot.insert(slot, now);
+        true
+    }
+
     fn insert_ready(&mut self, slot: ChartSlotKey, key: ChartImageKey, protocol: Arc<Protocol>) {
         self.failed.remove(&key);
         if !self.ready.contains_key(&key) {
@@ -346,8 +374,12 @@ impl ChartCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{picker_protocol_from_graphics, protocol_from_picker};
+    use super::{
+        CHART_MIN_REFRESH_INTERVAL, ChartCache, ChartImageKey, ChartSlotKey,
+        picker_protocol_from_graphics, protocol_from_picker,
+    };
     use crate::tui::render_caps::GraphicsProtocol;
+    use std::time::Instant;
 
     #[test]
     fn picker_protocol_maps_to_pixel_caps() {
@@ -372,5 +404,21 @@ mod tests {
             Some(ratatui_image::picker::ProtocolType::Kitty)
         );
         assert_eq!(picker_protocol_from_graphics(GraphicsProtocol::None), None);
+    }
+
+    #[test]
+    fn chart_cache_reserve_throttles_stale_slot_refreshes() {
+        let slot = ChartSlotKey(1);
+        let first_key = ChartImageKey(10);
+        let second_key = ChartImageKey(11);
+        let now = Instant::now();
+        let mut cache = ChartCache::default();
+
+        assert!(cache.reserve(slot, first_key, now));
+        cache.pending.remove(&first_key);
+        cache.latest_by_slot.insert(slot, first_key);
+
+        assert!(!cache.reserve(slot, second_key, now + CHART_MIN_REFRESH_INTERVAL / 2));
+        assert!(cache.reserve(slot, second_key, now + CHART_MIN_REFRESH_INTERVAL));
     }
 }

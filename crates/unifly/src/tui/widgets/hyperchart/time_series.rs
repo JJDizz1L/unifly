@@ -375,6 +375,18 @@ impl<'a> HyperChart<'a> {
         let scene = self.scene();
         let bounds = scene.bounds;
         let caps = self.caps();
+
+        self.render_y_gutter(gutter_area, plot_area, &scene, buf);
+
+        #[cfg(feature = "tui-graphics")]
+        if caps.graphics_protocol.is_pixels() && render_graphics_scene(&scene, plot_area, buf) {
+            self.render_annotations(&scene, plot_area, buf);
+            if let Some(axis_area) = x_axis_area {
+                self.render_x_axis(axis_area, plot_area, bounds, buf);
+            }
+            return;
+        }
+
         let plot_density = (usize::from(plot_area.width.max(1)) * 4).max(160);
         let paths: Vec<Vec<Vec<(f64, f64)>>> = scene
             .series
@@ -388,17 +400,6 @@ impl<'a> HyperChart<'a> {
                     .collect()
             })
             .collect();
-
-        self.render_y_gutter(gutter_area, plot_area, &scene, buf);
-
-        #[cfg(feature = "tui-graphics")]
-        if caps.graphics_protocol.is_pixels() && render_graphics_scene(&scene, plot_area, buf) {
-            self.render_annotations(&scene, plot_area, buf);
-            if let Some(axis_area) = x_axis_area {
-                self.render_x_axis(axis_area, plot_area, bounds, buf);
-            }
-            return;
-        }
 
         let canvas = Canvas::default()
             .background_color(theme::bg_base())
@@ -920,14 +921,15 @@ fn queue_graphics_scene(
 ) {
     use image::DynamicImage;
 
-    use super::raster::{RasterSize, rasterize_scene};
+    use super::raster::rasterize_scene;
 
-    let raster_size = RasterSize {
+    let raster_size = super::raster::RasterSize {
         width: u32::from(area.width.max(1)).saturating_mul(u32::from(font_size.width.max(1))),
         height: u32::from(area.height.max(1)).saturating_mul(u32::from(font_size.height.max(1))),
     };
-    let image = DynamicImage::ImageRgba8(rasterize_scene(scene, raster_size));
-    crate::tui::graphics::queue_chart(slot, key, image, target);
+    crate::tui::graphics::queue_chart(slot, key, target, || {
+        DynamicImage::ImageRgba8(rasterize_scene(scene, raster_size))
+    });
 }
 
 #[cfg(feature = "tui-graphics")]
