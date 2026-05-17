@@ -17,8 +17,8 @@ pub(super) const CHANNEL_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 #[derive(Clone, Default)]
 pub(super) struct ChannelOccupancy {
     pub channel: i32,
-    pub yours: String,
-    pub neighbors: String,
+    pub your_count: usize,
+    pub neighbor_count: usize,
     pub signal: Option<i32>,
     pub conflict: bool,
 }
@@ -487,8 +487,8 @@ impl WifiScreen {
 
                 ChannelOccupancy {
                     channel,
-                    yours: "█".repeat(your_count.min(4)),
-                    neighbors: "▒".repeat(neighbor_count.min(4)),
+                    your_count,
+                    neighbor_count,
                     signal,
                     conflict: your_count > 0 && neighbor_count > 0,
                 }

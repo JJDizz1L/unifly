@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, 
 
 use crate::tui::action::{WifiBand, WifiSubTab};
 use crate::tui::theme;
+use crate::tui::widgets::hyperchart::{HeatmapCell, HyperHeatmap};
 use crate::tui::widgets::signal_bars;
 
 use super::WifiScreen;
@@ -652,58 +653,43 @@ impl WifiScreen {
             return;
         }
 
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled(" Band ", Style::default().fg(theme::text_muted())),
-                Span::styled(
-                    band_label(self.selected_band),
-                    Style::default()
-                        .fg(theme::accent_secondary())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-        ];
+        let cells: Vec<HeatmapCell> = occupancy
+            .iter()
+            .map(|row| HeatmapCell {
+                label: format!("ch{}", row.channel),
+                your_count: row.your_count,
+                neighbor_count: row.neighbor_count,
+                signal: row.signal,
+                conflict: row.conflict,
+            })
+            .collect();
 
-        for row in occupancy {
-            let channel_style = if row.conflict {
+        let layout = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+        let header = Line::from(vec![
+            Span::styled(" Band ", Style::default().fg(theme::text_muted())),
+            Span::styled(
+                band_label(self.selected_band),
                 Style::default()
-                    .fg(theme::warning())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::accent_secondary())
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:>4} ", row.channel), channel_style),
-                Span::styled(
-                    if row.yours.is_empty() {
-                        "·".to_string()
-                    } else {
-                        row.yours
-                    },
-                    Style::default().fg(theme::accent_primary()),
+                    .fg(theme::accent_secondary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "  ·  {} APs  {} neighbors",
+                    occupancy.iter().map(|row| row.your_count).sum::<usize>(),
+                    occupancy
+                        .iter()
+                        .map(|row| row.neighbor_count)
+                        .sum::<usize>()
                 ),
-                Span::styled(" ", Style::default()),
-                Span::styled(
-                    if row.neighbors.is_empty() {
-                        "·".to_string()
-                    } else {
-                        row.neighbors
-                    },
-                    Style::default().fg(theme::text_muted()),
-                ),
-                Span::styled(
-                    format!(
-                        "  {}",
-                        row.signal
-                            .map_or_else(|| "─".to_string(), |dbm| format!("{dbm} dBm"))
-                    ),
-                    Style::default().fg(theme::text_secondary()),
-                ),
-            ]));
-        }
-
-        frame.render_widget(Paragraph::new(lines), inner);
+                Style::default().fg(theme::text_secondary()),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(vec![header, Line::from("")]), layout[0]);
+        frame.render_widget(
+            HyperHeatmap::new(&cells).empty_message(" Channel data unavailable "),
+            layout[1],
+        );
     }
 
     fn tab_line(&self) -> Line<'static> {

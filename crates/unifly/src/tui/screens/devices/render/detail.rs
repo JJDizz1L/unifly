@@ -10,6 +10,7 @@ use unifly_api::{Client, Device};
 
 use crate::tui::action::DeviceDetailTab;
 use crate::tui::theme;
+use crate::tui::widgets::hyperchart::SwitchFaceplate;
 use crate::tui::widgets::{bytes_fmt, status_indicator, sub_tabs};
 
 use crate::tui::screens::devices::DevicesScreen;
@@ -448,6 +449,17 @@ fn fmt_connector(c: Option<&unifly_api::model::PortConnector>) -> &'static str {
 }
 
 fn render_ports_tab(frame: &mut Frame, area: Rect, device: &Device) {
+    if !device.ports.is_empty() && area.width >= 44 && area.height >= 9 {
+        let layout = Layout::vertical([Constraint::Length(6), Constraint::Min(1)]).split(area);
+        frame.render_widget(SwitchFaceplate::new(&device.ports), layout[0]);
+        render_ports_table(frame, layout[1], device);
+        return;
+    }
+
+    render_ports_table(frame, area, device);
+}
+
+fn render_ports_table(frame: &mut Frame, area: Rect, device: &Device) {
     let mut lines = vec![Line::from("")];
 
     if device.ports.is_empty() {
