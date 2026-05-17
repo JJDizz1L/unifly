@@ -881,10 +881,8 @@ fn draw_gradient_column(
 
 #[cfg(feature = "tui-graphics")]
 fn render_graphics_scene(scene: &ChartScene<'_>, area: Rect, buf: &mut Buffer) -> bool {
-    use image::DynamicImage;
     use ratatui::layout::Size;
 
-    use super::raster::{RasterSize, rasterize_scene};
     use crate::tui::graphics::CachedChart;
 
     let Some(picker) = crate::tui::graphics::current_picker() else {
@@ -892,21 +890,74 @@ fn render_graphics_scene(scene: &ChartScene<'_>, area: Rect, buf: &mut Buffer) -
     };
     let font_size = picker.font_size();
     let target = Size::new(area.width.max(1), area.height.max(1));
+    let slot = graphics_chart_slot_key(scene, area, font_size);
     let key = graphics_chart_key(scene, area, font_size);
 
-    match crate::tui::graphics::render_cached_chart(key, area, buf) {
+    match crate::tui::graphics::render_cached_chart(slot, key, area, buf) {
         CachedChart::Rendered => return true,
+        CachedChart::Stale(current) => {
+            if matches!(current, crate::tui::graphics::CachedChartStatus::Missing) {
+                queue_graphics_scene(slot, key, scene, area, target, font_size);
+            }
+            return true;
+        }
         CachedChart::Pending | CachedChart::Failed => return false,
         CachedChart::Missing => {}
     }
+
+    queue_graphics_scene(slot, key, scene, area, target, font_size);
+    false
+}
+
+#[cfg(feature = "tui-graphics")]
+fn queue_graphics_scene(
+    slot: crate::tui::graphics::ChartSlotKey,
+    key: crate::tui::graphics::ChartImageKey,
+    scene: &ChartScene<'_>,
+    area: Rect,
+    target: ratatui::layout::Size,
+    font_size: ratatui_image::FontSize,
+) {
+    use image::DynamicImage;
+
+    use super::raster::{RasterSize, rasterize_scene};
 
     let raster_size = RasterSize {
         width: u32::from(area.width.max(1)).saturating_mul(u32::from(font_size.width.max(1))),
         height: u32::from(area.height.max(1)).saturating_mul(u32::from(font_size.height.max(1))),
     };
     let image = DynamicImage::ImageRgba8(rasterize_scene(scene, raster_size));
-    crate::tui::graphics::queue_chart(key, image, target);
-    false
+    crate::tui::graphics::queue_chart(slot, key, image, target);
+}
+
+#[cfg(feature = "tui-graphics")]
+fn graphics_chart_slot_key(
+    scene: &ChartScene<'_>,
+    area: Rect,
+    font_size: ratatui_image::FontSize,
+) -> crate::tui::graphics::ChartSlotKey {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut state = DefaultHasher::new();
+    area.width.hash(&mut state);
+    area.height.hash(&mut state);
+    font_size.width.hash(&mut state);
+    font_size.height.hash(&mut state);
+    render_caps::current().graphics_protocol.hash(&mut state);
+    hash_x_axis(scene.x_axis, &mut state);
+    hash_baseline_shape(scene.baseline, &mut state);
+    scene.grid.tick_count.hash(&mut state);
+    for series in &scene.series {
+        series.name.hash(&mut state);
+        hash_color(series.line_color, &mut state);
+        hash_fill(series.fill, &mut state);
+        match series.direction {
+            SeriesDirection::Up => 1u8.hash(&mut state),
+            SeriesDirection::Down => 2u8.hash(&mut state),
+        }
+    }
+    crate::tui::graphics::ChartSlotKey(state.finish())
 }
 
 #[cfg(feature = "tui-graphics")]
@@ -991,6 +1042,24 @@ fn hash_baseline(baseline: Baseline<'_>, state: &mut impl std::hash::Hasher) {
             1u8.hash(state);
             hash_f64(upper_max, state);
             hash_f64(lower_max, state);
+            upper_label.hash(state);
+            lower_label.hash(state);
+        }
+    }
+}
+
+#[cfg(feature = "tui-graphics")]
+fn hash_baseline_shape(baseline: Baseline<'_>, state: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    match baseline {
+        Baseline::Zero { .. } => 0u8.hash(state),
+        Baseline::Mirror {
+            upper_label,
+            lower_label,
+            ..
+        } => {
+            1u8.hash(state);
             upper_label.hash(state);
             lower_label.hash(state);
         }

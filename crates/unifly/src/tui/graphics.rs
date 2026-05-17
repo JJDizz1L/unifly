@@ -14,8 +14,8 @@ use ratatui_image::{Image, Resize, picker::Picker, picker::ProtocolType};
 
 use crate::tui::render_caps::GraphicsProtocol;
 
-const CHART_CACHE_CAPACITY: usize = 12;
-const CHART_QUEUE_CAPACITY: usize = 4;
+const CHART_CACHE_CAPACITY: usize = 48;
+const CHART_QUEUE_CAPACITY: usize = 8;
 
 static PICKER: OnceLock<RwLock<Option<Picker>>> = OnceLock::new();
 static CHARTS: OnceLock<ChartManager> = OnceLock::new();
@@ -23,15 +23,27 @@ static CHARTS: OnceLock<ChartManager> = OnceLock::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChartImageKey(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChartSlotKey(pub u64);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CachedChart {
     Rendered,
+    Stale(CachedChartStatus),
+    Missing,
+    Pending,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachedChartStatus {
     Missing,
     Pending,
     Failed,
 }
 
 struct ChartRequest {
+    slot: ChartSlotKey,
     key: ChartImageKey,
     picker: Picker,
     image: DynamicImage,
@@ -39,6 +51,7 @@ struct ChartRequest {
 }
 
 struct ChartResponse {
+    slot: ChartSlotKey,
     key: ChartImageKey,
     result: Result<Protocol, String>,
 }
@@ -53,6 +66,7 @@ struct ChartManager {
 #[derive(Default)]
 struct ChartCache {
     ready: HashMap<ChartImageKey, Arc<Protocol>>,
+    latest_by_slot: HashMap<ChartSlotKey, ChartImageKey>,
     pending: HashSet<ChartImageKey>,
     failed: HashSet<ChartImageKey>,
     order: VecDeque<ChartImageKey>,
@@ -104,7 +118,12 @@ pub fn has_ready_chart() -> bool {
         .is_some_and(|manager| manager.ready.load(Ordering::SeqCst))
 }
 
-pub fn render_cached_chart(key: ChartImageKey, area: Rect, buf: &mut Buffer) -> CachedChart {
+pub fn render_cached_chart(
+    slot: ChartSlotKey,
+    key: ChartImageKey,
+    area: Rect,
+    buf: &mut Buffer,
+) -> CachedChart {
     let Some(manager) = CHARTS.get() else {
         return CachedChart::Missing;
     };
@@ -120,21 +139,46 @@ pub fn render_cached_chart(key: ChartImageKey, area: Rect, buf: &mut Buffer) -> 
             .render(area, buf);
         return CachedChart::Rendered;
     }
-    if cache.pending.contains(&key) {
-        return CachedChart::Pending;
+
+    let exact_status = if cache.pending.contains(&key) {
+        CachedChartStatus::Pending
+    } else if cache.failed.contains(&key) {
+        CachedChartStatus::Failed
+    } else {
+        CachedChartStatus::Missing
+    };
+
+    if let Some(protocol) = cache
+        .latest_by_slot
+        .get(&slot)
+        .and_then(|latest_key| cache.ready.get(latest_key))
+        .cloned()
+    {
+        Image::new(protocol.as_ref())
+            .allow_clipping(true)
+            .render(area, buf);
+        return CachedChart::Stale(exact_status);
     }
-    if cache.failed.contains(&key) {
-        return CachedChart::Failed;
+
+    match exact_status {
+        CachedChartStatus::Missing => CachedChart::Missing,
+        CachedChartStatus::Pending => CachedChart::Pending,
+        CachedChartStatus::Failed => CachedChart::Failed,
     }
-    CachedChart::Missing
 }
 
-pub fn queue_chart(key: ChartImageKey, image: DynamicImage, target: Size) -> bool {
+pub fn queue_chart(
+    slot: ChartSlotKey,
+    key: ChartImageKey,
+    image: DynamicImage,
+    target: Size,
+) -> bool {
     let Some(picker) = current_picker() else {
         return false;
     };
     let manager = CHARTS.get_or_init(ChartManager::spawn);
     manager.queue(ChartRequest {
+        slot,
         key,
         picker,
         image,
@@ -195,6 +239,7 @@ impl ChartManager {
                         .map_err(|error| error.to_string());
                     if tx_main
                         .send(ChartResponse {
+                            slot: request.slot,
                             key: request.key,
                             result,
                         })
@@ -256,7 +301,9 @@ impl ChartManager {
             if let Ok(mut cache) = self.cache.lock() {
                 cache.pending.remove(&response.key);
                 match response.result {
-                    Ok(protocol) => cache.insert_ready(response.key, Arc::new(protocol)),
+                    Ok(protocol) => {
+                        cache.insert_ready(response.slot, response.key, Arc::new(protocol));
+                    }
                     Err(error) => {
                         tracing::debug!(
                             key = response.key.0,
@@ -276,12 +323,13 @@ impl ChartManager {
 }
 
 impl ChartCache {
-    fn insert_ready(&mut self, key: ChartImageKey, protocol: Arc<Protocol>) {
+    fn insert_ready(&mut self, slot: ChartSlotKey, key: ChartImageKey, protocol: Arc<Protocol>) {
         self.failed.remove(&key);
         if !self.ready.contains_key(&key) {
             self.order.push_back(key);
         }
         self.ready.insert(key, protocol);
+        self.latest_by_slot.insert(slot, key);
 
         while self.ready.len() > CHART_CACHE_CAPACITY {
             let Some(expired) = self.order.pop_front() else {
@@ -289,6 +337,8 @@ impl ChartCache {
             };
             if expired != key {
                 self.ready.remove(&expired);
+                self.latest_by_slot
+                    .retain(|_, latest_key| *latest_key != expired);
             }
         }
     }
