@@ -22,6 +22,11 @@ impl ChartGradient {
         Self { start, end }
     }
 
+    #[cfg(feature = "tui-graphics")]
+    pub(crate) const fn endpoints(self) -> (Color, Color) {
+        (self.start, self.end)
+    }
+
     pub fn bands(self, caps: RenderCaps, count: usize) -> Vec<Color> {
         let count = count.max(1);
         (0..count)
@@ -104,7 +109,7 @@ fn rgb_distance(left: (u8, u8, u8), right: (u8, u8, u8)) -> u32 {
     (dr * dr + dg * dg + db * db).cast_unsigned()
 }
 
-fn color_to_rgb(color: Color) -> (u8, u8, u8) {
+pub(crate) fn color_to_rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Reset => (192, 192, 192),
         Color::Black => (0, 0, 0),
@@ -247,7 +252,7 @@ fn linear_to_srgb_u8(value: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::render_caps::{ColorDepth, GlyphTier};
+    use crate::tui::render_caps::{ColorDepth, GlyphTier, GraphicsProtocol};
 
     #[test]
     fn oklab_lerp_preserves_endpoints() {
@@ -267,6 +272,7 @@ mod tests {
             RenderCaps {
                 color_depth: ColorDepth::TrueColor,
                 glyph_tier: GlyphTier::Braille,
+                graphics_protocol: GraphicsProtocol::None,
             },
             4,
         );
@@ -282,6 +288,7 @@ mod tests {
             RenderCaps {
                 color_depth: ColorDepth::NoColor,
                 glyph_tier: GlyphTier::Block,
+                graphics_protocol: GraphicsProtocol::None,
             },
             3,
         );
@@ -295,6 +302,7 @@ mod tests {
             RenderCaps {
                 color_depth: ColorDepth::Ansi256,
                 glyph_tier: GlyphTier::Braille,
+                graphics_protocol: GraphicsProtocol::None,
             },
             2,
         );
@@ -311,6 +319,7 @@ mod tests {
             RenderCaps {
                 color_depth: ColorDepth::Ansi16,
                 glyph_tier: GlyphTier::Braille,
+                graphics_protocol: GraphicsProtocol::None,
             },
             3,
         );

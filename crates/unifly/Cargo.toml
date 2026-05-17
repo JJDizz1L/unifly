@@ -48,6 +48,12 @@ tui = [
     "dep:futures",
     "dep:tokio-util",
 ]
+tui-graphics = [
+    "tui",
+    "dep:image",
+    "dep:flate2",
+    "dep:ratatui-image",
+]
 e2e = []
 
 [[bin]]
@@ -101,12 +107,15 @@ tui-widget-list    = { workspace = true, optional = true }
 tui-tree-widget    = { workspace = true, optional = true }
 tui-popup          = { workspace = true, optional = true }
 throbber-widgets-tui = { workspace = true, optional = true }
+ratatui-image     = { workspace = true, optional = true }
 color-eyre         = { workspace = true, optional = true }
 better-panic       = { workspace = true, optional = true }
 human-panic        = { workspace = true, optional = true }
 tracing-appender   = { workspace = true, optional = true }
 bytesize           = { workspace = true, optional = true }
 humantime          = { workspace = true, optional = true }
+image              = { workspace = true, optional = true }
+flate2             = { workspace = true, optional = true }
 indexmap            = { workspace = true, optional = true }
 futures            = { workspace = true, optional = true }
 tokio-util         = { workspace = true, optional = true }

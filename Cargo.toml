@@ -67,6 +67,7 @@ tui-widget-list = "0.15"
 tui-tree-widget = "0.24"
 tui-popup = "0.7"
 throbber-widgets-tui = "0.11"
+ratatui-image = { version = "11.0.2", default-features = false, features = ["crossterm"] }
 
 # ── TUI utilities ──
 better-panic = "0.3"
@@ -74,6 +75,8 @@ human-panic = "2"
 bytes = "1"
 bytesize = "2"
 humantime = "2"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 
 # ── Configuration ──
 figment = { version = "0.10", features = ["toml", "env"] }

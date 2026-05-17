@@ -20,6 +20,8 @@ pub mod color;
 pub mod empty;
 pub mod faceplate;
 pub mod heatmap;
+#[cfg(feature = "tui-graphics")]
+pub mod raster;
 pub mod scene;
 pub mod time_series;
 

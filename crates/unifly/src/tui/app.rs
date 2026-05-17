@@ -169,6 +169,12 @@ impl App {
     pub async fn run(&mut self) -> Result<()> {
         let mut tui = Tui::new()?;
         tui.enter()?;
+        #[cfg(feature = "tui-graphics")]
+        {
+            let protocol = crate::tui::graphics::probe_stdio();
+            crate::tui::render_caps::set_graphics_protocol(protocol);
+            info!(?protocol, "graphics chart protocol probe complete");
+        }
         self.terminal_size = tui.size().unwrap_or((80, 24));
         self.init_screens()?;
 
@@ -238,7 +244,16 @@ impl App {
     }
 
     pub(super) fn should_draw(&self) -> bool {
-        self.needs_redraw || (self.effects_enabled && self.effects.is_active())
+        self.needs_redraw || (self.effects_enabled && self.effects.is_active()) || {
+            #[cfg(feature = "tui-graphics")]
+            {
+                crate::tui::graphics::has_ready_chart()
+            }
+            #[cfg(not(feature = "tui-graphics"))]
+            {
+                false
+            }
+        }
     }
 }
 

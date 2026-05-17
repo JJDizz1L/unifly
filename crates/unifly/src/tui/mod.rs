@@ -5,6 +5,8 @@ pub mod data_bridge;
 pub mod effects;
 pub mod event;
 pub(crate) mod forms;
+#[cfg(feature = "tui-graphics")]
+pub mod graphics;
 pub mod render_caps;
 pub mod screen;
 pub mod screens;
