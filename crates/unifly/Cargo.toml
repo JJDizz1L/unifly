@@ -15,7 +15,7 @@ readme = "../../README.md"
 workspace = true
 
 [features]
-default = ["cli", "tui", "tui-graphics"]
+default = ["cli", "tui"]
 cli = [
     "dep:opaline",
     "dep:clap_complete",

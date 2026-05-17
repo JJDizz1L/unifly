@@ -164,6 +164,7 @@ pub struct Defaults {
     pub effects: bool,
 
     /// TUI chart glyph quality: "block", "braille", or "octant".
+    /// Defaults to "octant" when unset.
     #[serde(default)]
     pub chart_quality: Option<String>,
 }

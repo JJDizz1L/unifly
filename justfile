@@ -19,9 +19,13 @@ build-release:
 
 # ── Install ─────────────────────────────────────────────────────
 
-# Install unifly (CLI + TUI + graphics)
+# Install unifly (CLI + TUI)
 install:
     cargo install --path crates/unifly
+
+# Install unifly with optional terminal graphics protocol charts
+install-graphics:
+    cargo install --path crates/unifly --features tui-graphics
 
 # Install CLI-only binary
 install-cli:
@@ -112,6 +116,10 @@ cli *args:
 # Run the TUI dashboard
 tui *args:
     cargo run -p unifly -- tui {{args}}
+
+# Run the TUI dashboard with optional terminal graphics protocol charts
+tui-graphics *args:
+    cargo run -p unifly --features tui-graphics -- tui {{args}}
 
 # ── Docs ────────────────────────────────────────────────────────
 

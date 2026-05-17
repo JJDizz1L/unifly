@@ -66,7 +66,7 @@ impl RenderCaps {
             .as_deref()
             .or(configured_quality)
             .and_then(parse_glyph_tier)
-            .unwrap_or(GlyphTier::Braille);
+            .unwrap_or(GlyphTier::Octant);
 
         Self {
             color_depth,
@@ -214,11 +214,11 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_ansi16_and_braille() {
+    fn defaults_to_octant_charts() {
         let caps = RenderCaps::detect_with(None, env(&[]));
 
         assert_eq!(caps.color_depth, ColorDepth::Ansi16);
-        assert_eq!(caps.glyph_tier, GlyphTier::Braille);
+        assert_eq!(caps.glyph_tier, GlyphTier::Octant);
     }
 
     #[test]
