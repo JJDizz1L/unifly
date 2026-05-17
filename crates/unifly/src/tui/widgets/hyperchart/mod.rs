@@ -20,12 +20,14 @@ pub mod color;
 pub mod empty;
 pub mod faceplate;
 pub mod heatmap;
+pub mod scene;
 pub mod time_series;
 
 pub use bars::{Denominator, HyperBars, Row, ValueFormat};
 pub use color::ChartGradient;
 pub use faceplate::SwitchFaceplate;
 pub use heatmap::{HeatmapCell, HyperHeatmap};
+pub use scene::{Annotation, AnnotationKind, ChartScene, GridSpec, PlotBounds, SceneSeries};
 pub use time_series::{
     Baseline, ChartPoint, Domain, FillStyle, HyperChart, Renderer, Series, SeriesData,
     SeriesDirection, XAxis,

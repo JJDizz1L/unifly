@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
 use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph, Widget};
 
+use super::scene::{Annotation, AnnotationKind, ChartScene, GridSpec, PlotBounds, SceneSeries};
 use super::{ChartGradient, axis, block, empty};
 use crate::tui::render_caps::{self, RenderCaps};
 use crate::tui::theme;
@@ -131,22 +132,6 @@ pub struct HyperChart<'a> {
     focused: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PlotBounds {
-    x_min: f64,
-    x_max: f64,
-    y_min: f64,
-    y_max: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct VisiblePoint {
-    x: f64,
-    y: f64,
-    transformed_y: f64,
-    color: Color,
-}
-
 impl<'a> HyperChart<'a> {
     /// Construct a new `HyperChart` with sensible defaults.
     pub fn new(
@@ -230,9 +215,7 @@ impl<'a> HyperChart<'a> {
     }
 
     fn is_empty(&self) -> bool {
-        self.series
-            .iter()
-            .all(|series| series.data.visible_segments().is_empty())
+        self.scene().is_empty()
     }
 
     fn resolved_x_bounds(&self) -> (f64, f64) {
@@ -266,6 +249,30 @@ impl<'a> HyperChart<'a> {
         }
     }
 
+    fn scene(&self) -> ChartScene<'_> {
+        let bounds = self.plot_bounds();
+        ChartScene {
+            x_axis: self.x_axis,
+            bounds,
+            baseline: self.baseline,
+            series: self
+                .series
+                .iter()
+                .map(|series| SceneSeries {
+                    name: series.name,
+                    data: series.data,
+                    line_color: series.line_color,
+                    fill: series.fill,
+                    direction: series.direction,
+                })
+                .collect(),
+            grid: GridSpec {
+                tick_count: self.tick_count,
+            },
+            annotations: self.build_annotations(bounds),
+        }
+    }
+
     fn build_y_labels(&self, max_value: f64) -> Vec<Span<'static>> {
         let axis_style = Style::default().fg(theme::border_unfocused());
         match self.domain {
@@ -285,21 +292,14 @@ impl<'a> HyperChart<'a> {
         }
     }
 
-    fn transform_y(&self, series: &Series<'_>, value: f64) -> f64 {
-        match (self.baseline, series.direction) {
-            (Baseline::Mirror { lower_max, .. }, SeriesDirection::Down) => -value.min(lower_max),
-            (Baseline::Mirror { upper_max, .. }, SeriesDirection::Up) => value.min(upper_max),
-            _ => value,
-        }
-    }
-
     fn render_tiled(self, area: Rect, buf: &mut Buffer) {
-        let bounds = self.plot_bounds();
+        let scene = self.scene();
+        let bounds = scene.bounds;
         let axis_style = Style::default().fg(theme::border_unfocused());
         let fill_density = (usize::from(area.width.saturating_sub(8)) * 3).max(120);
         let caps = self.caps();
 
-        let line_buffers: Vec<Vec<(f64, f64)>> = self
+        let line_buffers: Vec<Vec<(f64, f64)>> = scene
             .series
             .iter()
             .map(|series| {
@@ -317,7 +317,7 @@ impl<'a> HyperChart<'a> {
             .collect();
 
         let mut datasets: Vec<Dataset> = Vec::new();
-        for (series, fill_buf) in self.series.iter().zip(fill_buffers.iter()) {
+        for (series, fill_buf) in scene.series.iter().zip(fill_buffers.iter()) {
             let Some(color) = series.fill.chart_color(caps) else {
                 continue;
             };
@@ -330,7 +330,7 @@ impl<'a> HyperChart<'a> {
             );
         }
 
-        for (series, data) in self.series.iter().zip(line_buffers.iter()) {
+        for (series, data) in scene.series.iter().zip(line_buffers.iter()) {
             datasets.push(
                 Dataset::default()
                     .name(series.name)
@@ -372,10 +372,11 @@ impl<'a> HyperChart<'a> {
             .split(chart_area);
         let gutter_area = layout[0];
         let plot_area = layout[1];
-        let bounds = self.plot_bounds();
+        let scene = self.scene();
+        let bounds = scene.bounds;
         let caps = self.caps();
         let plot_density = (usize::from(plot_area.width.max(1)) * 4).max(160);
-        let paths: Vec<Vec<Vec<(f64, f64)>>> = self
+        let paths: Vec<Vec<Vec<(f64, f64)>>> = scene
             .series
             .iter()
             .map(|series| {
@@ -388,7 +389,7 @@ impl<'a> HyperChart<'a> {
             })
             .collect();
 
-        self.render_y_gutter(gutter_area, plot_area, bounds, buf);
+        self.render_y_gutter(gutter_area, plot_area, &scene, buf);
 
         let canvas = Canvas::default()
             .background_color(theme::bg_base())
@@ -396,15 +397,15 @@ impl<'a> HyperChart<'a> {
             .x_bounds([bounds.x_min, bounds.x_max])
             .y_bounds([bounds.y_min, bounds.y_max])
             .paint(|ctx| {
-                self.draw_grid(ctx, bounds);
+                Self::draw_grid(ctx, &scene);
 
-                for (series, series_paths) in self.series.iter().zip(paths.iter()) {
+                for (series, series_paths) in scene.series.iter().zip(paths.iter()) {
                     let Some(bands) = series.fill.bands(caps, usize::from(plot_area.height)) else {
                         continue;
                     };
                     for path in series_paths {
                         for &(x, y) in path {
-                            let y = self.transform_y(series, y);
+                            let y = scene.transform_y(series, y);
                             draw_gradient_column(ctx, x, y, &bands);
                         }
                     }
@@ -412,7 +413,7 @@ impl<'a> HyperChart<'a> {
 
                 ctx.layer();
 
-                for (series, series_paths) in self.series.iter().zip(paths.iter()) {
+                for (series, series_paths) in scene.series.iter().zip(paths.iter()) {
                     for path in series_paths {
                         for pair in path.windows(2) {
                             let [(x1, y1), (x2, y2)] = pair else {
@@ -420,9 +421,9 @@ impl<'a> HyperChart<'a> {
                             };
                             ctx.draw(&CanvasLine {
                                 x1: *x1,
-                                y1: self.transform_y(series, *y1),
+                                y1: scene.transform_y(series, *y1),
                                 x2: *x2,
-                                y2: self.transform_y(series, *y2),
+                                y2: scene.transform_y(series, *y2),
                                 color: series.line_color,
                             });
                         }
@@ -431,73 +432,49 @@ impl<'a> HyperChart<'a> {
             });
 
         canvas.render(plot_area, buf);
-        self.render_annotations(plot_area, bounds, buf);
+        self.render_annotations(&scene, plot_area, buf);
         if let Some(axis_area) = x_axis_area {
             self.render_x_axis(axis_area, plot_area, bounds, buf);
         }
     }
 
-    fn draw_grid(&self, ctx: &mut ratatui::widgets::canvas::Context<'_>, bounds: PlotBounds) {
+    fn draw_grid(ctx: &mut ratatui::widgets::canvas::Context<'_>, scene: &ChartScene<'_>) {
         let grid_color = theme::border_unfocused();
         let baseline_color = theme::border_unfocused();
 
-        for y in self.gridlines() {
+        for y in scene.gridlines() {
             ctx.draw(&CanvasLine {
-                x1: bounds.x_min,
+                x1: scene.bounds.x_min,
                 y1: y,
-                x2: bounds.x_max,
+                x2: scene.bounds.x_max,
                 y2: y,
                 color: grid_color,
             });
         }
 
         ctx.draw(&CanvasLine {
-            x1: bounds.x_min,
+            x1: scene.bounds.x_min,
             y1: 0.0,
-            x2: bounds.x_max,
+            x2: scene.bounds.x_max,
             y2: 0.0,
             color: baseline_color,
         });
-    }
-
-    fn gridlines(&self) -> Vec<f64> {
-        let divisions = self.tick_count.saturating_sub(1).max(1);
-        let mut values = Vec::new();
-        match self.baseline {
-            Baseline::Zero { y_max } => {
-                for idx in 1..=divisions {
-                    values.push(y_max * fraction(idx, divisions));
-                }
-            }
-            Baseline::Mirror {
-                upper_max,
-                lower_max,
-                ..
-            } => {
-                for idx in 1..=divisions {
-                    let position = fraction(idx, divisions);
-                    values.push(upper_max * position);
-                    values.push(-lower_max * position);
-                }
-            }
-        }
-        values
     }
 
     fn render_y_gutter(
         &self,
         gutter_area: Rect,
         plot_area: Rect,
-        bounds: PlotBounds,
+        scene: &ChartScene<'_>,
         buf: &mut Buffer,
     ) {
-        match self.baseline {
+        match scene.baseline {
             Baseline::Zero { y_max } => {
                 let labels = self.build_y_labels(y_max);
                 let divisions = self.tick_count.saturating_sub(1).max(1);
                 for (idx, label) in labels.iter().enumerate() {
                     let y = y_max * fraction(idx, divisions);
-                    let row = y_to_row(plot_area, bounds, y);
+                    let row = y_to_row(plot_area, scene.bounds, y);
                     Paragraph::new(Line::from(label.clone())).render(
                         Rect {
                             x: gutter_area.x,
@@ -515,10 +492,24 @@ impl<'a> HyperChart<'a> {
                 upper_label,
                 lower_label,
             } => {
-                self.render_mirror_labels(gutter_area, plot_area, bounds, upper_max, true, buf);
-                self.render_mirror_labels(gutter_area, plot_area, bounds, lower_max, false, buf);
+                self.render_mirror_labels(
+                    gutter_area,
+                    plot_area,
+                    scene.bounds,
+                    upper_max,
+                    true,
+                    buf,
+                );
+                self.render_mirror_labels(
+                    gutter_area,
+                    plot_area,
+                    scene.bounds,
+                    lower_max,
+                    false,
+                    buf,
+                );
 
-                let baseline_row = y_to_row(plot_area, bounds, 0.0);
+                let baseline_row = y_to_row(plot_area, scene.bounds, 0.0);
                 let label_style = Style::default().fg(theme::border_unfocused());
                 if baseline_row > plot_area.y {
                     render_text(
@@ -655,52 +646,62 @@ impl<'a> HyperChart<'a> {
         }
     }
 
-    fn render_annotations(&self, plot_area: Rect, bounds: PlotBounds, buf: &mut Buffer) {
-        for series in self.series {
-            if let Some(point) = self.last_visible_point(series, bounds) {
-                Self::render_point_marker("●", point, plot_area, bounds, buf);
-                self.render_marker_value(point, plot_area, bounds, buf);
-            }
-            if let Some(point) = self.peak_visible_point(series, bounds) {
-                Self::render_point_marker("◆", point, plot_area, bounds, buf);
+    fn render_annotations(&self, scene: &ChartScene<'_>, plot_area: Rect, buf: &mut Buffer) {
+        for annotation in &scene.annotations {
+            let symbol = match annotation.kind {
+                AnnotationKind::Now => "●",
+                AnnotationKind::Peak => "◆",
+            };
+            Self::render_point_marker(symbol, *annotation, plot_area, scene.bounds, buf);
+            if annotation.kind == AnnotationKind::Now {
+                self.render_marker_value(*annotation, plot_area, scene.bounds, buf);
             }
         }
     }
 
-    fn last_visible_point(&self, series: &Series<'_>, bounds: PlotBounds) -> Option<VisiblePoint> {
-        series
-            .data
-            .points()
-            .into_iter()
-            .rev()
-            .filter(|&(x, _)| x >= bounds.x_min && x <= bounds.x_max)
-            .map(|(x, y)| VisiblePoint {
-                x,
-                y,
-                transformed_y: self.transform_y(series, y),
-                color: series.line_color,
-            })
-            .next()
+    fn build_annotations(&self, bounds: PlotBounds) -> Vec<Annotation> {
+        let mut annotations = Vec::new();
+        for series in self.series {
+            if let Some(annotation) = self.visible_annotation(series, bounds, AnnotationKind::Now) {
+                annotations.push(annotation);
+            }
+            if let Some(annotation) = self.visible_annotation(series, bounds, AnnotationKind::Peak)
+            {
+                annotations.push(annotation);
+            }
+        }
+        annotations
     }
 
-    fn peak_visible_point(&self, series: &Series<'_>, bounds: PlotBounds) -> Option<VisiblePoint> {
-        series
+    fn visible_annotation(
+        &self,
+        series: &Series<'_>,
+        bounds: PlotBounds,
+        kind: AnnotationKind,
+    ) -> Option<Annotation> {
+        let mut points = series
             .data
             .points()
             .into_iter()
-            .filter(|&(x, _)| x >= bounds.x_min && x <= bounds.x_max)
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-            .map(|(x, y)| VisiblePoint {
-                x,
-                y,
-                transformed_y: self.transform_y(series, y),
-                color: series.line_color,
-            })
+            .filter(|&(x, _)| x >= bounds.x_min && x <= bounds.x_max);
+
+        let point = match kind {
+            AnnotationKind::Now => points.next_back(),
+            AnnotationKind::Peak => points.max_by(|left, right| left.1.total_cmp(&right.1)),
+        };
+
+        point.map(|(x, y)| Annotation {
+            kind,
+            x,
+            y,
+            transformed_y: transform_value(self.baseline, series.direction, y),
+            color: series.line_color,
+        })
     }
 
     fn render_point_marker(
         symbol: &str,
-        point: VisiblePoint,
+        point: Annotation,
         plot_area: Rect,
         bounds: PlotBounds,
         buf: &mut Buffer,
@@ -722,7 +723,7 @@ impl<'a> HyperChart<'a> {
 
     fn render_marker_value(
         &self,
-        point: VisiblePoint,
+        point: Annotation,
         plot_area: Rect,
         bounds: PlotBounds,
         buf: &mut Buffer,
@@ -866,6 +867,14 @@ fn draw_gradient_column(
             y2: y * end,
             color: *color,
         });
+    }
+}
+
+fn transform_value(baseline: Baseline<'_>, direction: SeriesDirection, value: f64) -> f64 {
+    match (baseline, direction) {
+        (Baseline::Mirror { lower_max, .. }, SeriesDirection::Down) => -value.min(lower_max),
+        (Baseline::Mirror { upper_max, .. }, SeriesDirection::Up) => value.min(upper_max),
+        _ => value,
     }
 }
 
