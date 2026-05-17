@@ -15,8 +15,9 @@ readme = "../../README.md"
 workspace = true
 
 [features]
-default = ["cli", "tui"]
+default = ["cli", "tui", "tui-graphics"]
 cli = [
+    "dep:opaline",
     "dep:clap_complete",
     "dep:miette",
     "dep:tabled",
@@ -27,6 +28,7 @@ cli = [
     "dep:serde_yaml_ng",
 ]
 tui = [
+    "cli",
     "dep:opaline",
     "dep:ratatui",
     "dep:ratatui-macros",
@@ -95,7 +97,7 @@ indicatif          = { workspace = true, optional = true }
 rpassword          = { workspace = true, optional = true }
 serde_yaml_ng      = { workspace = true, optional = true }
 
-# ── TUI-only deps (optional) ─────────────────────────────────────
+# ── TUI/theme deps (optional) ────────────────────────────────────
 opaline            = { workspace = true, optional = true }
 ratatui            = { workspace = true, optional = true }
 ratatui-macros     = { workspace = true, optional = true }

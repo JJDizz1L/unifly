@@ -19,11 +19,11 @@ build-release:
 
 # ── Install ─────────────────────────────────────────────────────
 
-# Install unifly (CLI + TUI)
+# Install unifly (CLI + TUI + graphics)
 install:
     cargo install --path crates/unifly
 
-# Install CLI only (no TUI dependencies)
+# Install CLI-only binary
 install-cli:
     cargo install --path crates/unifly --no-default-features --features cli
 

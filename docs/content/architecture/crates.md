@@ -40,7 +40,8 @@ Provides two connection modes:
 
 **Role:** Single binary and configuration.
 
-Produces one binary with feature-gated capabilities (`cli` and `tui` features):
+Produces one binary with feature-gated capabilities (`cli`, `tui`, and
+`tui-graphics` features). The default feature set includes all three.
 
 ### CLI (`unifly`)
 
@@ -56,7 +57,7 @@ Real-time dashboard built with `ratatui`:
 - **11 screens**: Dashboard, Devices, Clients, Networks, Firewall, Topology, Events, Stats, WiFi, Settings, Onboarding
 - **Data bridge**: Translates `Controller` events into TUI actions
 - **SilkCircuit theme**: Opaline-powered color palette with the project's visual identity
-- **Braille charts**: High-resolution terminal graphs using Unicode Braille patterns
+- **Pixel charts**: Graphics-protocol terminal charts with Unicode fallbacks
 - **Reactive rendering**: Only re-renders on data changes via `EntityStream` subscriptions
 
 ### Configuration
