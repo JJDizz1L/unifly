@@ -16,8 +16,10 @@
 pub mod axis;
 pub mod bars;
 pub mod block;
+pub mod color;
 pub mod empty;
 pub mod time_series;
 
 pub use bars::{Denominator, HyperBars, Row, ValueFormat};
+pub use color::ChartGradient;
 pub use time_series::{Domain, HyperChart, Renderer, Series};

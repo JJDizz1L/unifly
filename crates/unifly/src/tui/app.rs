@@ -93,6 +93,8 @@ pub struct App {
     /// Timestamp of the previous rendered frame — used to compute per-frame
     /// delta time for the effect stack.
     last_frame: Instant,
+    /// Whether the next render tick should draw a frame.
+    needs_redraw: bool,
 }
 
 impl App {
@@ -146,6 +148,7 @@ impl App {
             effects: EffectStack::new(),
             effects_enabled,
             last_frame: Instant::now(),
+            needs_redraw: true,
         }
     }
 
@@ -219,8 +222,11 @@ impl App {
             while let Ok(action) = self.action_rx.try_recv() {
                 self.process_action(&action)?;
 
-                if let Action::Render = action {
+                if let Action::Render = action
+                    && self.should_draw()
+                {
                     tui.draw(|frame| self.render(frame))?;
+                    self.needs_redraw = false;
                 }
             }
         }
@@ -229,5 +235,38 @@ impl App {
         events.stop();
         info!("TUI event loop ended");
         Ok(())
+    }
+
+    pub(super) fn should_draw(&self) -> bool {
+        self.needs_redraw || (self.effects_enabled && self.effects.is_active())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_gate_skips_clean_static_frames() {
+        let mut app = App::new(None, None, false);
+
+        assert!(app.should_draw());
+
+        app.needs_redraw = false;
+        app.process_action(&Action::Render)
+            .expect("render action should be handled");
+
+        assert!(!app.should_draw());
+    }
+
+    #[test]
+    fn render_gate_reopens_after_state_change() {
+        let mut app = App::new(None, None, false);
+        app.needs_redraw = false;
+
+        app.process_action(&Action::Resize(120, 40))
+            .expect("resize should be handled");
+
+        assert!(app.should_draw());
     }
 }

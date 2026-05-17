@@ -5,6 +5,7 @@ pub mod data_bridge;
 pub mod effects;
 pub mod event;
 pub(crate) mod forms;
+pub mod render_caps;
 pub mod screen;
 pub mod screens;
 pub mod terminal;
@@ -36,9 +37,18 @@ pub async fn launch(global: &GlobalOpts, args: TuiArgs) -> Result<()> {
 
     let _log_guard = setup_tracing(global.verbose, &args.log_file);
 
-    let config_theme = config::load_config().ok().and_then(|c| c.defaults.theme);
-    let theme_name = global.theme.as_deref().or(config_theme.as_deref());
+    let loaded_config = config::load_config().ok();
+    let theme_name = global.theme.as_deref().or_else(|| {
+        loaded_config
+            .as_ref()
+            .and_then(|config| config.defaults.theme.as_deref())
+    });
     theme::initialize(theme_name);
+    render_caps::initialize(
+        loaded_config
+            .as_ref()
+            .and_then(|config| config.defaults.chart_quality.as_deref()),
+    );
 
     info!(
         url = global.controller.as_deref().unwrap_or("(not set)"),

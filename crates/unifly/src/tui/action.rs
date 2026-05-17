@@ -312,6 +312,7 @@ pub enum Action {
     Quit,
     Tick,
     Render,
+    Invalidate,
     Resize(u16, u16),
 
     // ── Navigation ────────────────────────────────────────────────

@@ -104,8 +104,7 @@ impl Component for DashboardScreen {
     }
 
     fn update(&mut self, action: &Action) -> Result<Option<Action>> {
-        self.apply_action(action);
-        Ok(None)
+        Ok(self.apply_action(action))
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {

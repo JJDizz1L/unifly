@@ -3,13 +3,16 @@
 //! Wraps the crossterm + ratatui terminal lifecycle so the rest of the app
 //! never has to think about raw mode or alternate screen.
 
-use std::io::{Stdout, stdout};
+use std::io::{Stdout, Write, stdout};
 
 use color_eyre::eyre::Result;
 use crossterm::{
-    ExecutableCommand, cursor,
+    ExecutableCommand, QueueableCommand, cursor,
     event::{DisableMouseCapture, EnableMouseCapture},
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
@@ -53,7 +56,19 @@ impl Tui {
     where
         F: FnOnce(&mut ratatui::Frame),
     {
-        self.terminal.draw(render)?;
+        let sync = sync_updates_enabled();
+        if sync {
+            self.terminal.backend_mut().queue(BeginSynchronizedUpdate)?;
+        }
+
+        let result = self.terminal.draw(render).map(|_| ());
+
+        if sync {
+            self.terminal.backend_mut().queue(EndSynchronizedUpdate)?;
+            self.terminal.backend_mut().flush()?;
+        }
+
+        result?;
         Ok(())
     }
 
@@ -62,6 +77,17 @@ impl Tui {
         let size = self.terminal.size()?;
         Ok((size.width, size.height))
     }
+}
+
+fn sync_updates_enabled() -> bool {
+    sync_updates_enabled_with(|key| std::env::var_os(key).is_some())
+}
+
+fn sync_updates_enabled_with<F>(env_contains: F) -> bool
+where
+    F: Fn(&str) -> bool,
+{
+    !env_contains("UNIFLY_NO_SYNC")
 }
 
 impl Drop for Tui {
@@ -96,4 +122,19 @@ pub fn install_hooks() -> Result<()> {
     }));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_updates_enabled_with;
+
+    #[test]
+    fn sync_updates_default_on() {
+        assert!(sync_updates_enabled_with(|_| false));
+    }
+
+    #[test]
+    fn sync_updates_can_be_disabled() {
+        assert!(!sync_updates_enabled_with(|key| key == "UNIFLY_NO_SYNC"));
+    }
 }

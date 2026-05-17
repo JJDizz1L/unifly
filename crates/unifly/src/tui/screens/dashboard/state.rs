@@ -101,15 +101,15 @@ impl DashboardScreen {
     }
 
     #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-    pub(super) fn sample_bandwidth_if_due(&mut self, now: Instant) {
+    pub(super) fn sample_bandwidth_if_due(&mut self, now: Instant) -> bool {
         if self.last_chart_sample_at.is_some_and(|last_sample_at| {
             now.duration_since(last_sample_at) < LIVE_CHART_SAMPLE_INTERVAL
         }) {
-            return;
+            return false;
         }
 
         let Some((tx_bps, rx_bps)) = self.current_bandwidth() else {
-            return;
+            return false;
         };
 
         let target_upload_bps = tx_bps as f64;
@@ -152,12 +152,15 @@ impl DashboardScreen {
             );
         }
         self.last_chart_sample_at = Some(now);
+        true
     }
 
-    pub(super) fn apply_action(&mut self, action: &Action) {
+    pub(super) fn apply_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::Tick => {
-                self.sample_bandwidth_if_due(Instant::now());
+                if self.sample_bandwidth_if_due(Instant::now()) && self.focused {
+                    return Some(Action::Invalidate);
+                }
             }
             Action::DevicesUpdated(devices) => {
                 self.devices = Arc::clone(devices);
@@ -214,6 +217,8 @@ impl DashboardScreen {
             }
             _ => {}
         }
+
+        None
     }
 }
 
@@ -255,5 +260,23 @@ mod tests {
 
         let reference = screen.bandwidth_scale_reference();
         assert!(reference >= 4_000.0);
+    }
+
+    #[test]
+    fn focused_tick_invalidates_after_sampling() {
+        let mut screen = DashboardScreen::new();
+        screen.focused = true;
+        let now = Instant::now();
+        screen.device_bandwidth = Some(BandwidthSample {
+            tx_bps: 10_000,
+            rx_bps: 40_000,
+            captured_at: now,
+        });
+
+        let action = screen.apply_action(&Action::Tick);
+
+        assert!(matches!(action, Some(Action::Invalidate)));
+        assert_eq!(screen.bandwidth_tx.len(), 1);
+        assert_eq!(screen.bandwidth_rx.len(), 1);
     }
 }

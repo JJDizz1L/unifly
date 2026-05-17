@@ -22,6 +22,10 @@ pub fn derive_tokens(theme: &mut opaline::Theme) {
     // Area fill colors for traffic charts — heavily darkened accents
     theme.register_default_token("unifly.tx_fill", accent_secondary.darken(0.85));
     theme.register_default_token("unifly.rx_fill", accent_tertiary.darken(0.85));
+    theme.register_default_token("unifly.tx_gradient.start", accent_secondary.darken(0.93));
+    theme.register_default_token("unifly.tx_gradient.end", accent_secondary.darken(0.45));
+    theme.register_default_token("unifly.rx_gradient.start", accent_tertiary.darken(0.93));
+    theme.register_default_token("unifly.rx_gradient.end", accent_tertiary.darken(0.45));
 
     // Chart series — ordered standard tokens for multi-line graphs
     theme.register_default_token("unifly.chart.0", theme.color(tokens::ACCENT_SECONDARY));
@@ -106,6 +110,22 @@ pub fn tx_fill() -> Color {
 }
 pub fn rx_fill() -> Color {
     t().color("unifly.rx_fill").into()
+}
+
+pub fn tx_gradient_endpoints() -> (Color, Color) {
+    let th = t();
+    (
+        th.color("unifly.tx_gradient.start").into(),
+        th.color("unifly.tx_gradient.end").into(),
+    )
+}
+
+pub fn rx_gradient_endpoints() -> (Color, Color) {
+    let th = t();
+    (
+        th.color("unifly.rx_gradient.start").into(),
+        th.color("unifly.rx_gradient.end").into(),
+    )
 }
 
 pub fn chart_series() -> [Color; 6] {

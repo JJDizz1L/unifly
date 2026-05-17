@@ -18,7 +18,11 @@ impl App {
     /// Process a single action — update app state and propagate to components.
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     pub(super) fn process_action(&mut self, action: &Action) -> Result<()> {
+        let invalidates = action_invalidates(action);
         if self.handle_command_action(action)? {
+            if invalidates {
+                self.needs_redraw = true;
+            }
             return Ok(());
         }
 
@@ -58,6 +62,9 @@ impl App {
             Action::Reconnecting => {
                 self.connection_status = ConnectionStatus::Reconnecting;
             }
+            Action::Invalidate => {
+                self.needs_redraw = true;
+            }
             Action::Render => {}
             Action::Tick => {
                 self.forward_to_all_screens(action)?;
@@ -66,6 +73,7 @@ impl App {
                     && created.elapsed() > notification_ttl(notification.level)
                 {
                     self.notification = None;
+                    self.needs_redraw = true;
                 }
 
                 if self.active_screen == ScreenId::Stats
@@ -145,8 +153,25 @@ impl App {
             }
         }
 
+        if invalidates {
+            self.needs_redraw = true;
+        }
+
         Ok(())
     }
+}
+
+fn action_invalidates(action: &Action) -> bool {
+    !matches!(
+        action,
+        Action::Render
+            | Action::Tick
+            | Action::RequestWifiNeighbors(_)
+            | Action::RequestWifiChannels
+            | Action::RequestWifiClientDetail(_)
+            | Action::RequestWifiRoamHistory { .. }
+            | Action::RequestStats(_)
+    )
 }
 
 /// Open a URL in the user's default browser.

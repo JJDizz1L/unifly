@@ -162,6 +162,10 @@ pub struct Defaults {
     /// Whether tachyonfx animations are enabled in the TUI.
     #[serde(default = "default_effects")]
     pub effects: bool,
+
+    /// TUI chart glyph quality: "block", "braille", or "octant".
+    #[serde(default)]
+    pub chart_quality: Option<String>,
 }
 
 impl Default for Defaults {
@@ -174,6 +178,7 @@ impl Default for Defaults {
             theme: None,
             show_donate: default_show_donate(),
             effects: default_effects(),
+            chart_quality: None,
         }
     }
 }
