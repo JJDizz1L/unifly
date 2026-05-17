@@ -65,6 +65,12 @@ impl App {
             Action::Invalidate => {
                 self.needs_redraw = true;
             }
+            Action::ChartPeak => {
+                if self.effects_enabled {
+                    self.effects.start_chart_pulse();
+                }
+                self.needs_redraw = true;
+            }
             Action::Render => {}
             Action::Tick => {
                 self.forward_to_all_screens(action)?;

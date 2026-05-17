@@ -14,6 +14,7 @@ impl StatsScreen {
             bandwidth_rx_y_max: 0.0,
             client_counts: Vec::new(),
             client_y_max: 0.0,
+            bandwidth_peak: 0.0,
             dpi_apps: Vec::new(),
             dpi_categories: Vec::new(),
         }
@@ -28,12 +29,13 @@ impl StatsScreen {
         }
     }
 
-    pub(super) fn apply_action(&mut self, action: &Action) {
+    pub(super) fn apply_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::SetStatsPeriod(period) => {
                 self.period = *period;
                 self.bandwidth_tx_y_max = 0.0;
                 self.bandwidth_rx_y_max = 0.0;
+                self.bandwidth_peak = 0.0;
                 self.client_y_max = 0.0;
             }
             Action::StatsUpdated(data) => {
@@ -53,6 +55,8 @@ impl StatsScreen {
                     .iter()
                     .map(|&(_, value)| value)
                     .fold(0.0_f64, f64::max);
+                let previous_peak = self.bandwidth_peak;
+                self.bandwidth_peak = tx_max.max(rx_max);
                 self.bandwidth_tx_y_max = axis::stable_upper_bound(
                     self.bandwidth_tx_y_max,
                     tx_max,
@@ -73,9 +77,15 @@ impl StatsScreen {
                     .fold(0.0_f64, f64::max);
                 self.client_y_max =
                     axis::stable_upper_bound(self.client_y_max, client_max, CLIENT_TICK_COUNT, 1.0);
+
+                if self.focused && previous_peak > 0.0 && self.bandwidth_peak > previous_peak {
+                    return Some(Action::ChartPeak);
+                }
             }
             _ => {}
         }
+
+        None
     }
 }
 
@@ -99,6 +109,7 @@ mod tests {
         let mut screen = StatsScreen::new();
         screen.bandwidth_tx_y_max = 42_000.0;
         screen.bandwidth_rx_y_max = 84_000.0;
+        screen.bandwidth_peak = 84_000.0;
         screen.client_y_max = 99.0;
 
         screen.apply_action(&Action::SetStatsPeriod(StatsPeriod::SevenDays));
@@ -106,6 +117,7 @@ mod tests {
         assert_eq!(screen.period, StatsPeriod::SevenDays);
         assert_eq!(screen.bandwidth_tx_y_max, 0.0);
         assert_eq!(screen.bandwidth_rx_y_max, 0.0);
+        assert_eq!(screen.bandwidth_peak, 0.0);
         assert_eq!(screen.client_y_max, 0.0);
     }
 
@@ -155,6 +167,27 @@ mod tests {
             screen.client_y_max,
             axis::stable_upper_bound(first_client_max, 8.0, CLIENT_TICK_COUNT, 1.0)
         );
+    }
+
+    #[test]
+    fn focused_stats_update_pulses_on_higher_peak() {
+        let mut screen = StatsScreen::new();
+        screen.focused = true;
+        screen.bandwidth_peak = 100_000.0;
+
+        let action = screen.apply_action(&Action::StatsUpdated(sample_stats_data(200_000.0, 8.0)));
+
+        assert!(matches!(action, Some(Action::ChartPeak)));
+    }
+
+    #[test]
+    fn focused_stats_update_skips_pulse_on_first_snapshot() {
+        let mut screen = StatsScreen::new();
+        screen.focused = true;
+
+        let action = screen.apply_action(&Action::StatsUpdated(sample_stats_data(200_000.0, 8.0)));
+
+        assert!(action.is_none());
     }
 
     #[test]

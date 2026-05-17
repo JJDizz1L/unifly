@@ -31,12 +31,11 @@ impl DashboardScreen {
 
     /// Record a bandwidth sample into the chart data ring buffer.
     #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-    pub(super) fn push_bandwidth_sample(&mut self, tx_bps: u64, rx_bps: u64) {
+    pub(super) fn push_bandwidth_sample(&mut self, tx_bps: u64, rx_bps: u64) -> bool {
         self.sample_counter += 1.0;
         self.bandwidth_tx.push((self.sample_counter, tx_bps as f64));
         self.bandwidth_rx.push((self.sample_counter, rx_bps as f64));
-        self.peak_tx = self.peak_tx.max(tx_bps);
-        self.peak_rx = self.peak_rx.max(rx_bps);
+        let peak_changed = self.update_peaks(tx_bps, rx_bps);
 
         if self.bandwidth_tx.len() > LIVE_CHART_WINDOW_SAMPLES {
             self.bandwidth_tx.remove(0);
@@ -57,6 +56,14 @@ impl DashboardScreen {
             BANDWIDTH_TICK_COUNT,
             MIN_BANDWIDTH_SCALE,
         );
+        peak_changed
+    }
+
+    fn update_peaks(&mut self, tx_bps: u64, rx_bps: u64) -> bool {
+        let previous_peak = self.peak_tx.max(self.peak_rx);
+        self.peak_tx = self.peak_tx.max(tx_bps);
+        self.peak_rx = self.peak_rx.max(rx_bps);
+        self.peak_tx.max(self.peak_rx) > previous_peak
     }
 
     pub(super) fn bandwidth_scale_reference(series: &[(f64, f64)]) -> f64 {
@@ -97,16 +104,14 @@ impl DashboardScreen {
     }
 
     #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-    pub(super) fn sample_bandwidth_if_due(&mut self, now: Instant) -> bool {
+    pub(super) fn sample_bandwidth_if_due(&mut self, now: Instant) -> Option<bool> {
         if self.last_chart_sample_at.is_some_and(|last_sample_at| {
             now.duration_since(last_sample_at) < LIVE_CHART_SAMPLE_INTERVAL
         }) {
-            return false;
+            return None;
         }
 
-        let Some((tx_bps, rx_bps)) = self.current_bandwidth() else {
-            return false;
-        };
+        let (tx_bps, rx_bps) = self.current_bandwidth()?;
 
         let target_upload_bps = tx_bps as f64;
         let target_download_bps = rx_bps as f64;
@@ -142,20 +147,26 @@ impl DashboardScreen {
             clippy::as_conversions
         )]
         {
-            self.push_bandwidth_sample(
+            let peak_changed = self.push_bandwidth_sample(
                 next_upload_bps.round() as u64,
                 next_download_bps.round() as u64,
             );
+            self.last_chart_sample_at = Some(now);
+            Some(peak_changed)
         }
-        self.last_chart_sample_at = Some(now);
-        true
     }
 
     pub(super) fn apply_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::Tick => {
-                if self.sample_bandwidth_if_due(Instant::now()) && self.focused {
-                    return Some(Action::Invalidate);
+                if let Some(peak_changed) = self.sample_bandwidth_if_due(Instant::now())
+                    && self.focused
+                {
+                    return Some(if peak_changed {
+                        Action::ChartPeak
+                    } else {
+                        Action::Invalidate
+                    });
                 }
             }
             Action::DevicesUpdated(devices) => {
@@ -176,9 +187,11 @@ impl DashboardScreen {
                                 captured_at: now,
                             })
                     });
-                if let Some((tx_bps, rx_bps)) = self.current_bandwidth() {
-                    self.peak_tx = self.peak_tx.max(tx_bps);
-                    self.peak_rx = self.peak_rx.max(rx_bps);
+                if let Some((tx_bps, rx_bps)) = self.current_bandwidth()
+                    && self.update_peaks(tx_bps, rx_bps)
+                    && self.focused
+                {
+                    return Some(Action::ChartPeak);
                 }
             }
             Action::ClientsUpdated(clients) => {
@@ -206,9 +219,11 @@ impl DashboardScreen {
                         rx_bps: wan.rx_bytes_r.unwrap_or(0),
                         captured_at: now,
                     });
-                if let Some((tx_bps, rx_bps)) = self.current_bandwidth() {
-                    self.peak_tx = self.peak_tx.max(tx_bps);
-                    self.peak_rx = self.peak_rx.max(rx_bps);
+                if let Some((tx_bps, rx_bps)) = self.current_bandwidth()
+                    && self.update_peaks(tx_bps, rx_bps)
+                    && self.focused
+                {
+                    return Some(Action::ChartPeak);
                 }
             }
             _ => {}
@@ -269,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn focused_tick_invalidates_after_sampling() {
+    fn focused_tick_pulses_on_new_peak_after_sampling() {
         let mut screen = DashboardScreen::new();
         screen.focused = true;
         let now = Instant::now();
@@ -281,8 +296,26 @@ mod tests {
 
         let action = screen.apply_action(&Action::Tick);
 
-        assert!(matches!(action, Some(Action::Invalidate)));
+        assert!(matches!(action, Some(Action::ChartPeak)));
         assert_eq!(screen.bandwidth_tx.len(), 1);
         assert_eq!(screen.bandwidth_rx.len(), 1);
+    }
+
+    #[test]
+    fn focused_tick_invalidates_without_new_peak() {
+        let mut screen = DashboardScreen::new();
+        screen.focused = true;
+        let now = Instant::now();
+        screen.peak_tx = 100_000;
+        screen.peak_rx = 100_000;
+        screen.device_bandwidth = Some(BandwidthSample {
+            tx_bps: 10_000,
+            rx_bps: 40_000,
+            captured_at: now,
+        });
+
+        let action = screen.apply_action(&Action::Tick);
+
+        assert!(matches!(action, Some(Action::Invalidate)));
     }
 }

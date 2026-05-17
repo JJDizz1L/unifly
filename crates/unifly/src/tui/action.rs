@@ -313,6 +313,7 @@ pub enum Action {
     Tick,
     Render,
     Invalidate,
+    ChartPeak,
     Resize(u16, u16),
 
     // ── Navigation ────────────────────────────────────────────────

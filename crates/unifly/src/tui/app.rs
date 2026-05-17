@@ -269,4 +269,26 @@ mod tests {
 
         assert!(app.should_draw());
     }
+
+    #[test]
+    fn chart_peak_starts_effect_when_enabled() {
+        let mut app = App::new(None, None, true);
+
+        app.process_action(&Action::ChartPeak)
+            .expect("chart peak should be handled");
+
+        assert!(app.effects.is_active());
+        assert!(app.should_draw());
+    }
+
+    #[test]
+    fn chart_peak_respects_disabled_effects() {
+        let mut app = App::new(None, None, false);
+
+        app.process_action(&Action::ChartPeak)
+            .expect("chart peak should be handled");
+
+        assert!(!app.effects.is_active());
+        assert!(app.should_draw());
+    }
 }

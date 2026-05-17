@@ -21,6 +21,7 @@ pub struct StatsScreen {
     bandwidth_rx_y_max: f64,
     client_counts: Vec<(f64, f64)>,
     client_y_max: f64,
+    bandwidth_peak: f64,
     dpi_apps: Vec<(String, u64)>,
     dpi_categories: Vec<(String, u64)>,
 }
@@ -43,8 +44,7 @@ impl Component for StatsScreen {
     }
 
     fn update(&mut self, action: &Action) -> Result<Option<Action>> {
-        self.apply_action(action);
-        Ok(None)
+        Ok(self.apply_action(action))
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {

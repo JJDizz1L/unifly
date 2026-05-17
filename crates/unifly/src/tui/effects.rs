@@ -15,7 +15,10 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use tachyonfx::{Duration as FxDuration, Effect, EffectManager, Motion, fx};
+use tachyonfx::{
+    Duration as FxDuration, Effect, EffectManager, EffectTimer, Interpolation, Motion, fx,
+    pattern::RadialPattern,
+};
 
 /// The role of a running effect — used to cancel in-progress effects of the
 /// same kind when a new one of the same role is registered.
@@ -80,6 +83,16 @@ impl EffectStack {
             .add_unique_effect(EffectKind::ScreenTransition, effect);
     }
 
+    /// Play a restrained pulse when chart data establishes a new peak.
+    pub fn start_chart_pulse(&mut self) {
+        let effect = fx::ping_pong(
+            fx::lighten_fg(0.18, EffectTimer::from_ms(180, Interpolation::SineOut))
+                .with_pattern(RadialPattern::center().with_transition_width(10.0)),
+        );
+        self.manager
+            .add_unique_effect(EffectKind::ChartPulse, effect);
+    }
+
     /// Register a custom effect under the given kind, cancelling any prior
     /// effect of the same kind.
     pub fn add_unique(&mut self, kind: EffectKind, effect: Effect) {
@@ -120,6 +133,13 @@ mod tests {
     fn screen_transition_activates_stack() {
         let mut stack = EffectStack::new();
         stack.start_screen_transition();
+        assert!(stack.is_active());
+    }
+
+    #[test]
+    fn chart_pulse_activates_stack() {
+        let mut stack = EffectStack::new();
+        stack.start_chart_pulse();
         assert!(stack.is_active());
     }
 
