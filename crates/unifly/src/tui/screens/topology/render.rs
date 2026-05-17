@@ -1,8 +1,8 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Context, Rectangle};
+use ratatui::widgets::canvas::{Canvas, Context, Line as CanvasLine, Rectangle};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use unifly_api::DeviceType;
@@ -130,13 +130,13 @@ impl TopologyScreen {
                     for switch in &switch_nodes {
                         let sw_cx = switch.x + switch.width / 2.0;
                         let sw_top = switch.y + switch.height;
-                        ctx.draw(&ratatui::widgets::canvas::Line {
-                            x1: gw_cx,
-                            y1: gw_bottom,
-                            x2: sw_cx,
-                            y2: sw_top,
-                            color: theme::accent_secondary(),
-                        });
+                        draw_weighted_edge(
+                            ctx,
+                            (gw_cx, gw_bottom),
+                            (sw_cx, sw_top),
+                            theme::accent_secondary(),
+                            switch.traffic_bytes_per_sec,
+                        );
                     }
                 }
 
@@ -146,13 +146,13 @@ impl TopologyScreen {
                     for ap in &ap_nodes {
                         let ap_cx = ap.x + ap.width / 2.0;
                         let ap_top = ap.y + ap.height;
-                        ctx.draw(&ratatui::widgets::canvas::Line {
-                            x1: sw_cx,
-                            y1: sw_bottom,
-                            x2: ap_cx,
-                            y2: ap_top,
-                            color: theme::accent_primary(),
-                        });
+                        draw_weighted_edge(
+                            ctx,
+                            (sw_cx, sw_bottom),
+                            (ap_cx, ap_top),
+                            theme::accent_primary(),
+                            ap.traffic_bytes_per_sec,
+                        );
                     }
                 }
             });
@@ -170,5 +170,51 @@ impl TopologyScreen {
             Span::styled("reset", theme::key_hint()),
         ]);
         frame.render_widget(Paragraph::new(hints), hints_area);
+    }
+}
+
+fn draw_weighted_edge(
+    ctx: &mut Context<'_>,
+    (x1, y1): (f64, f64),
+    (x2, y2): (f64, f64),
+    color: Color,
+    traffic_bytes_per_sec: u64,
+) {
+    let offsets: &[f64] = match edge_weight(traffic_bytes_per_sec) {
+        1 => &[0.0],
+        2 => &[-0.22, 0.22],
+        _ => &[-0.38, 0.0, 0.38],
+    };
+
+    for offset in offsets {
+        ctx.draw(&CanvasLine {
+            x1: x1 + offset,
+            y1,
+            x2: x2 + offset,
+            y2,
+            color,
+        });
+    }
+}
+
+fn edge_weight(traffic_bytes_per_sec: u64) -> u8 {
+    match traffic_bytes_per_sec {
+        0..=125_000 => 1,
+        125_001..=12_500_000 => 2,
+        _ => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edge_weight;
+
+    #[test]
+    fn edge_weight_scales_with_traffic() {
+        assert_eq!(edge_weight(0), 1);
+        assert_eq!(edge_weight(125_000), 1);
+        assert_eq!(edge_weight(125_001), 2);
+        assert_eq!(edge_weight(12_500_000), 2);
+        assert_eq!(edge_weight(12_500_001), 3);
     }
 }

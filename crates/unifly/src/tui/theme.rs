@@ -40,6 +40,9 @@ pub fn derive_tokens(theme: &mut opaline::Theme) {
     theme.register_default_token("unifly.wifi.your_ap", theme.color(tokens::ACCENT_PRIMARY));
     theme.register_default_token("unifly.wifi.neighbor", theme.color(tokens::TEXT_MUTED));
     theme.register_default_token("unifly.wifi.conflict", theme.color(tokens::WARNING));
+    theme.register_default_token("unifly.events.density.low", accent_secondary);
+    theme.register_default_token("unifly.events.density.mid", accent_tertiary);
+    theme.register_default_token("unifly.events.density.high", theme.color(tokens::WARNING));
 }
 
 /// Initialize the theme subsystem. Call early in `main()`, before any rendering.
@@ -161,6 +164,15 @@ pub fn wifi_neighbor() -> Color {
 
 pub fn wifi_conflict() -> Color {
     t().color("unifly.wifi.conflict").into()
+}
+
+pub fn event_density_colors() -> [Color; 3] {
+    let th = t();
+    [
+        th.color("unifly.events.density.low").into(),
+        th.color("unifly.events.density.mid").into(),
+        th.color("unifly.events.density.high").into(),
+    ]
 }
 
 // ── Semantic style accessors ─────────────────────────────────────────

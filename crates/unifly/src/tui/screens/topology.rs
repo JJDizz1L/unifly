@@ -24,6 +24,7 @@ struct TopoNode {
     device_type: DeviceType,
     state: DeviceState,
     client_count: u32,
+    traffic_bytes_per_sec: u64,
     x: f64,
     y: f64,
     width: f64,

@@ -57,6 +57,7 @@ impl TopologyScreen {
                 device_type: gateway.device_type,
                 state: gateway.state,
                 client_count: gateway.client_count.unwrap_or(0),
+                traffic_bytes_per_sec: device_traffic_bytes_per_sec(gateway),
                 x,
                 y: 80.0,
                 width: 16.0,
@@ -74,6 +75,7 @@ impl TopologyScreen {
                 device_type: switch.device_type,
                 state: switch.state,
                 client_count: switch.client_count.unwrap_or(0),
+                traffic_bytes_per_sec: device_traffic_bytes_per_sec(switch),
                 x,
                 y: 52.0,
                 width: 14.0,
@@ -91,6 +93,7 @@ impl TopologyScreen {
                 device_type: ap.device_type,
                 state: ap.state,
                 client_count: ap.client_count.unwrap_or(0),
+                traffic_bytes_per_sec: device_traffic_bytes_per_sec(ap),
                 x,
                 y: 24.0,
                 width: 12.0,
@@ -108,6 +111,7 @@ impl TopologyScreen {
                 device_type: device.device_type,
                 state: device.state,
                 client_count: device.client_count.unwrap_or(0),
+                traffic_bytes_per_sec: device_traffic_bytes_per_sec(device),
                 x,
                 y: 2.0,
                 width: 12.0,
@@ -123,6 +127,18 @@ impl TopologyScreen {
             self.devices = Arc::clone(devices);
         }
     }
+}
+
+fn device_traffic_bytes_per_sec(device: &unifly_api::Device) -> u64 {
+    device
+        .stats
+        .uplink_bandwidth
+        .as_ref()
+        .map_or(0, |bandwidth| {
+            bandwidth
+                .tx_bytes_per_sec
+                .saturating_add(bandwidth.rx_bytes_per_sec)
+        })
 }
 
 #[cfg(test)]

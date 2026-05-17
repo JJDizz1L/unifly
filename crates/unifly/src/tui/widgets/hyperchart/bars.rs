@@ -143,27 +143,24 @@ impl Widget for HyperBars<'_> {
         let colors = theme::chart_series();
         let max_rows = usize::from(inner.height);
 
-        let denom_value: f64 = match self.denominator {
+        let denom_value: u64 = match self.denominator {
             Denominator::MaxObserved => self
                 .rows
                 .iter()
                 .map(|row| row.value)
                 .max()
                 .unwrap_or(1)
-                .max(1) as f64,
+                .max(1),
             Denominator::Total => {
                 let total: u64 = self.rows.iter().map(|row| row.value).sum();
-                total.max(1) as f64
+                total.max(1)
             }
         };
 
         let mut lines: Vec<Line> = Vec::with_capacity(max_rows);
         for (idx, row) in self.rows.iter().enumerate().take(max_rows) {
-            let fraction = (row.value as f64 / denom_value).clamp(0.0, 1.0);
-            let raw_width = (fraction * bar_budget as f64).round() as usize;
-            let min_width = usize::from(row.value > 0);
-            let bar_width = raw_width.clamp(min_width, bar_budget);
-            let bar: String = "█".repeat(bar_width);
+            let bar_width = u16::try_from(bar_budget).unwrap_or(u16::MAX);
+            let bar = fractional_bar(row.value, denom_value, bar_width);
             let color = colors[idx % colors.len()];
 
             let display_label: String = row.label.chars().take(self.label_width).collect();
@@ -175,7 +172,7 @@ impl Widget for HyperBars<'_> {
                     width = value_width
                 ),
                 ValueFormat::Percent => {
-                    let pct = (row.value as f64 / denom_value) * 100.0;
+                    let pct = (row.value as f64 / denom_value as f64) * 100.0;
                     format!("{pct:>width$.0}%", width = value_width.saturating_sub(1))
                 }
                 ValueFormat::Count => {
@@ -210,6 +207,19 @@ impl Widget for HyperBars<'_> {
 
         Paragraph::new(lines).render(inner, buf);
     }
+}
+
+fn fractional_bar(value: u64, max_value: u64, width: u16) -> String {
+    let bar = bytes_fmt::fmt_traffic_bar(value, max_value, width);
+    if value == 0 || bar.chars().any(|ch| ch != ' ') {
+        return bar;
+    }
+
+    let mut chars: Vec<char> = bar.chars().collect();
+    if let Some(first) = chars.first_mut() {
+        *first = '▏';
+    }
+    chars.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -300,5 +310,13 @@ mod tests {
             .collect();
         assert!(rendered.contains("70%"), "expected 70% in rendered output");
         assert!(rendered.contains("30%"), "expected 30% in rendered output");
+    }
+
+    #[test]
+    fn fractional_bar_preserves_tiny_non_zero_values() {
+        let bar = fractional_bar(1, 1_000, 8);
+
+        assert!(bar.starts_with('▏'));
+        assert_eq!(bar.chars().count(), 8);
     }
 }
