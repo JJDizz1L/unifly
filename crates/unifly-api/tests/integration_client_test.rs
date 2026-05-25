@@ -9,7 +9,8 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use unifly_api::integration_types::{
-    DeviceDetailsResponse, NetworkCreateUpdate, NetworkDetailsResponse, Page, SiteResponse,
+    DeviceDetailsResponse, FirewallPolicyResponse, NetworkCreateUpdate, NetworkDetailsResponse,
+    Page, SiteResponse,
 };
 use unifly_api::{ControllerPlatform, Error, IntegrationClient};
 
@@ -177,6 +178,56 @@ async fn test_delete_firewall_policy() {
         .delete_firewall_policy(&site_id, &policy_id)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_list_firewall_policies_accepts_legacy_policy_without_id() {
+    let (server, client) = setup().await;
+
+    let site_id = Uuid::new_v4();
+    let policy_id = Uuid::new_v4();
+    let body = json!({
+        "offset": 0,
+        "limit": 25,
+        "count": 2,
+        "totalCount": 2,
+        "data": [
+            {
+                "name": "Legacy migrated policy",
+                "enabled": true,
+                "action": {"type": "DROP"},
+                "loggingEnabled": true,
+                "index": 10001
+            },
+            {
+                "id": policy_id,
+                "name": "Modern policy",
+                "enabled": true,
+                "action": {"type": "ALLOW"},
+                "loggingEnabled": false
+            }
+        ]
+    });
+
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/integration/v1/sites/{site_id}/firewall/policies"
+        )))
+        .and(query_param("offset", "0"))
+        .and(query_param("limit", "25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let page: Page<FirewallPolicyResponse> = client
+        .list_firewall_policies(&site_id, 0, 25)
+        .await
+        .unwrap();
+
+    assert_eq!(page.total_count, 2);
+    assert_eq!(page.data.len(), 2);
+    assert_eq!(page.data[0].id, None);
+    assert_eq!(page.data[1].id, Some(policy_id));
 }
 
 #[tokio::test]
