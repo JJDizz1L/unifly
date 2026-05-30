@@ -312,7 +312,10 @@ pub enum DomainFilter {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirewallPolicyResponse {
-    pub id: Uuid,
+    /// Integration UUID. Legacy user policies migrated from pre-zone firewall
+    /// config can arrive without one.
+    #[serde(default)]
+    pub id: Option<Uuid>,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,

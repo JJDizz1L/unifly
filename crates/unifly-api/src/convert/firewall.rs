@@ -69,8 +69,13 @@ impl From<integration_types::FirewallPolicyResponse> for FirewallPolicy {
             })
             .unwrap_or_default();
 
+        let id = p.id.map_or_else(
+            || synthesize_legacy_policy_id(&source_endpoint, &destination_endpoint, index, &p.name),
+            EntityId::Uuid,
+        );
+
         FirewallPolicy {
-            id: EntityId::Uuid(p.id),
+            id,
             name: p.name,
             description: p.description,
             enabled: p.enabled,
@@ -90,6 +95,24 @@ impl From<integration_types::FirewallPolicyResponse> for FirewallPolicy {
             data_source: DataSource::IntegrationApi,
         }
     }
+}
+
+fn synthesize_legacy_policy_id(
+    source: &PolicyEndpoint,
+    destination: &PolicyEndpoint,
+    index: Option<i32>,
+    name: &str,
+) -> EntityId {
+    let src = source
+        .zone_id
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), ToString::to_string);
+    let dst = destination
+        .zone_id
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), ToString::to_string);
+    let idx = index.map_or_else(|| "noindex".to_owned(), |i| i.to_string());
+    EntityId::Legacy(format!("fwp:legacy:{src}:{dst}:{idx}:{name}"))
 }
 
 fn convert_policy_endpoint(
@@ -418,6 +441,32 @@ pub fn firewall_group_from_session(v: &serde_json::Value) -> Option<FirewallGrou
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn firewall_policy_without_id_synthesizes_legacy_id() {
+        let raw = json!({
+            "name": "DropInvalid",
+            "enabled": true,
+            "action": {"type": "DROP"},
+            "ipProtocolScope": {"ipVersion": "IPV4_AND_IPV6"},
+            "loggingEnabled": true,
+            "source": {"zoneId": "fedb7e64-ff34-4dcb-ae6d-9645807b3329"},
+            "destination": {"zoneId": "6cfd721d-0c5d-4dde-a2ee-cfdc386ebd9c"},
+            "index": 10001
+        });
+
+        let response: integration_types::FirewallPolicyResponse =
+            serde_json::from_value(raw).expect("legacy policy without id should parse");
+        assert!(response.id.is_none());
+
+        let policy = FirewallPolicy::from(response);
+        assert_eq!(
+            policy.id.to_string(),
+            "fwp:legacy:fedb7e64-ff34-4dcb-ae6d-9645807b3329:6cfd721d-0c5d-4dde-a2ee-cfdc386ebd9c:10001:DropInvalid"
+        );
+        assert_eq!(policy.name, "DropInvalid");
+        assert!(policy.logging_enabled);
+    }
 
     #[test]
     fn firewall_group_from_session_parses_port_group() {

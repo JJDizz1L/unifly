@@ -44,9 +44,10 @@ pub(super) async fn route(ctx: &CommandContext, cmd: Command) -> Result<CommandR
                 connection_state_filter: req.connection_states,
             };
             let resp = ic.create_firewall_policy(&sid, &body).await?;
-            Ok(CommandResult::CreatedId(crate::model::EntityId::Uuid(
-                resp.id,
-            )))
+            let id = resp.id.ok_or_else(|| CoreError::ValidationFailed {
+                message: "firewall policy create response did not include an id".into(),
+            })?;
+            Ok(CommandResult::CreatedId(crate::model::EntityId::Uuid(id)))
         }
         Command::UpdateFirewallPolicy { id, update } => {
             let (ic, sid) = require_integration(integration, site_id, "UpdateFirewallPolicy")?;
