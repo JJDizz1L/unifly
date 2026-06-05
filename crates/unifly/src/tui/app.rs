@@ -244,16 +244,10 @@ impl App {
     }
 
     pub(super) fn should_draw(&self) -> bool {
-        self.needs_redraw || (self.effects_enabled && self.effects.is_active()) || {
-            #[cfg(feature = "tui-graphics")]
-            {
-                crate::tui::graphics::has_ready_chart()
-            }
-            #[cfg(not(feature = "tui-graphics"))]
-            {
-                false
-            }
-        }
+        crate::tui::render_scheduler::should_draw(
+            self.needs_redraw,
+            self.effects_enabled && self.effects.is_active(),
+        )
     }
 }
 

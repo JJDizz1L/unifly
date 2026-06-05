@@ -13,7 +13,7 @@ use ratatui::widgets::Widget;
 use ratatui_image::protocol::Protocol;
 use ratatui_image::{Image, Resize, picker::Picker, picker::ProtocolType};
 
-use crate::tui::render_caps::GraphicsProtocol;
+use crate::tui::render_caps::{self, GraphicsProtocol};
 
 const CHART_CACHE_CAPACITY: usize = 48;
 const CHART_QUEUE_CAPACITY: usize = 8;
@@ -76,14 +76,14 @@ struct ChartCache {
 }
 
 pub fn probe_stdio() -> GraphicsProtocol {
-    if std::env::var_os("UNIFLY_DISABLE_GRAPHICS").is_some() {
+    if render_caps::graphics_disabled() {
         store_picker(None);
         return GraphicsProtocol::None;
     }
 
     match Picker::from_query_stdio() {
         Ok(mut picker) => {
-            if let Some(protocol) = forced_protocol_from_env() {
+            if let Some(protocol) = render_caps::forced_graphics_protocol() {
                 if let Some(protocol_type) = picker_protocol_from_graphics(protocol) {
                     picker.set_protocol_type(protocol_type);
                     store_picker(Some(picker));
@@ -197,17 +197,6 @@ fn store_picker(picker: Option<Picker>) {
     let lock = PICKER.get_or_init(|| RwLock::new(picker.clone()));
     if let Ok(mut guard) = lock.write() {
         *guard = picker;
-    }
-}
-
-fn forced_protocol_from_env() -> Option<GraphicsProtocol> {
-    let value = std::env::var("UNIFLY_GRAPHICS_PROTOCOL").ok()?;
-    match value.trim().to_ascii_lowercase().as_str() {
-        "kitty" => Some(GraphicsProtocol::Kitty),
-        "sixel" | "sixels" => Some(GraphicsProtocol::Sixel),
-        "iterm2" | "iterm" => Some(GraphicsProtocol::Iterm2),
-        "off" | "none" | "false" | "0" => Some(GraphicsProtocol::None),
-        _ => None,
     }
 }
 

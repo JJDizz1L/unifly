@@ -8,6 +8,7 @@ pub(crate) mod forms;
 #[cfg(feature = "tui-graphics")]
 pub mod graphics;
 pub mod render_caps;
+mod render_scheduler;
 pub mod screen;
 pub mod screens;
 pub mod terminal;

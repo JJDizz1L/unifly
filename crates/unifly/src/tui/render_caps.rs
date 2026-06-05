@@ -52,6 +52,26 @@ impl GraphicsProtocol {
     }
 }
 
+pub fn graphics_disabled() -> bool {
+    std::env::var_os("UNIFLY_DISABLE_GRAPHICS").is_some()
+}
+
+pub fn forced_graphics_protocol() -> Option<GraphicsProtocol> {
+    std::env::var("UNIFLY_GRAPHICS_PROTOCOL")
+        .ok()
+        .and_then(|value| parse_graphics_protocol(&value))
+}
+
+pub fn parse_graphics_protocol(value: &str) -> Option<GraphicsProtocol> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "kitty" => Some(GraphicsProtocol::Kitty),
+        "sixel" | "sixels" => Some(GraphicsProtocol::Sixel),
+        "iterm2" | "iterm" => Some(GraphicsProtocol::Iterm2),
+        "off" | "none" | "false" | "0" => Some(GraphicsProtocol::None),
+        _ => None,
+    }
+}
+
 impl RenderCaps {
     pub fn detect(configured_quality: Option<&str>) -> Self {
         Self::detect_with(configured_quality, |key| std::env::var(key).ok())
@@ -132,19 +152,11 @@ fn detect_graphics_protocol<F>(env: &F) -> GraphicsProtocol
 where
     F: Fn(&str) -> Option<String>,
 {
-    if env("UNIFLY_DISABLE_GRAPHICS").is_some() {
+    if graphics_disabled_with(env) {
         return GraphicsProtocol::None;
     }
 
-    if let Some(protocol) = env("UNIFLY_GRAPHICS_PROTOCOL").and_then(|value| {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "kitty" => Some(GraphicsProtocol::Kitty),
-            "sixel" | "sixels" => Some(GraphicsProtocol::Sixel),
-            "iterm2" | "iterm" => Some(GraphicsProtocol::Iterm2),
-            "off" | "none" | "false" | "0" => Some(GraphicsProtocol::None),
-            _ => None,
-        }
-    }) {
+    if let Some(protocol) = forced_graphics_protocol_with(env) {
         return protocol;
     }
 
@@ -164,6 +176,20 @@ where
     }
 
     GraphicsProtocol::None
+}
+
+fn graphics_disabled_with<F>(env: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env("UNIFLY_DISABLE_GRAPHICS").is_some()
+}
+
+fn forced_graphics_protocol_with<F>(env: &F) -> Option<GraphicsProtocol>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env("UNIFLY_GRAPHICS_PROTOCOL").and_then(|value| parse_graphics_protocol(&value))
 }
 
 fn parse_glyph_tier(value: &str) -> Option<GlyphTier> {
