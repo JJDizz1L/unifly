@@ -608,6 +608,7 @@ pub async fn handle(
         VpnCommand::Servers(args) => handle_servers(controller, args, global, &painter).await,
         VpnCommand::Tunnels(args) => handle_tunnels(controller, args, global, &painter).await,
         VpnCommand::Status => {
+            util::ensure_session_access(controller, "vpn status").await?;
             let sas = controller.list_ipsec_sa().await?;
             if sas.is_empty() {
                 if !global.quiet && matches!(global.output, OutputFormat::Table) {
@@ -626,23 +627,26 @@ pub async fn handle(
             output::print_output(&out, global.quiet);
             Ok(())
         }
-        VpnCommand::Health => match controller.get_vpn_health() {
-            Some(health) => {
-                let out = output::render_single(
-                    &global.output,
-                    &health,
-                    |health| vpn_health_detail(health, &painter),
-                    |health| health.subsystem.clone(),
-                );
-                output::print_output(&out, global.quiet);
-                Ok(())
+        VpnCommand::Health => {
+            util::ensure_session_access(controller, "vpn health").await?;
+            match controller.get_vpn_health() {
+                Some(health) => {
+                    let out = output::render_single(
+                        &global.output,
+                        &health,
+                        |health| vpn_health_detail(health, &painter),
+                        |health| health.subsystem.clone(),
+                    );
+                    output::print_output(&out, global.quiet);
+                    Ok(())
+                }
+                None => Err(CliError::NotFound {
+                    resource_type: "vpn health".into(),
+                    identifier: "vpn".into(),
+                    list_command: "system health".into(),
+                }),
             }
-            None => Err(CliError::NotFound {
-                resource_type: "vpn health".into(),
-                identifier: "vpn".into(),
-                list_command: "system health".into(),
-            }),
-        },
+        }
         VpnCommand::SiteToSite(site_to_site) => {
             handle_site_to_site(controller, site_to_site, global, &painter).await
         }
@@ -767,6 +771,8 @@ async fn handle_site_to_site(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "site-to-site vpn").await?;
+
     match args.command {
         SiteToSiteVpnCommand::List(list) => {
             let vpns = util::apply_list_args(
@@ -834,6 +840,8 @@ async fn handle_remote_access(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "remote-access vpn").await?;
+
     match args.command {
         RemoteAccessVpnCommand::List(list) => {
             let servers = util::apply_list_args(
@@ -928,6 +936,8 @@ async fn handle_settings(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "vpn settings").await?;
+
     match args.command {
         VpnSettingsCommand::List(list) => {
             let settings = util::apply_list_args(
@@ -986,6 +996,8 @@ async fn handle_clients(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "vpn clients").await?;
+
     match args.command {
         VpnClientsCommand::List(list) => {
             let clients = util::apply_list_args(
@@ -1056,6 +1068,8 @@ async fn handle_connections(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "vpn connections").await?;
+
     match args.command {
         VpnConnectionsCommand::List(list) => {
             let connections = util::apply_list_args(
@@ -1103,6 +1117,8 @@ async fn handle_peers(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "vpn peers").await?;
+
     match args.command {
         VpnPeersCommand::List { server_id, list } => {
             let peers = util::apply_list_args(
@@ -1195,6 +1211,8 @@ async fn handle_magic_site_to_site(
     global: &GlobalOpts,
     painter: &output::Painter,
 ) -> Result<(), CliError> {
+    util::ensure_session_access(controller, "magic site-to-site vpn").await?;
+
     match args.command {
         MagicSiteToSiteVpnCommand::List(list) => {
             let configs = util::apply_list_args(
