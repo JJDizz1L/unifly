@@ -47,7 +47,8 @@ impl Controller {
         site_id: uuid::Uuid,
     ) -> Result<(), CoreError> {
         let mut integration = integration::fetch(integration, site_id).await?;
-        let session = session::fetch_optional(self.inner.session_client.lock().await.clone()).await;
+        let session_client = self.inner.session_client.lock().await.clone();
+        let session = session::fetch_optional(session_client).await;
 
         merge::merge_session_clients(&mut integration.clients, &session.clients, &session.users);
         merge::merge_session_devices(&mut integration.devices, &session.devices);
