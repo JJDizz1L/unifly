@@ -84,8 +84,8 @@ impl RenderCaps {
         let color_depth = detect_color_depth(&env);
         let glyph_tier = env("UNIFLY_CHART_QUALITY")
             .as_deref()
-            .or(configured_quality)
             .and_then(parse_glyph_tier)
+            .or_else(|| configured_quality.and_then(parse_glyph_tier))
             .unwrap_or(GlyphTier::Octant);
 
         Self {
@@ -127,7 +127,7 @@ fn detect_color_depth<F>(env: &F) -> ColorDepth
 where
     F: Fn(&str) -> Option<String>,
 {
-    if env("NO_COLOR").is_some() {
+    if env("NO_COLOR").is_some_and(|value| !value.is_empty()) {
         return ColorDepth::NoColor;
     }
 
@@ -223,6 +223,14 @@ mod tests {
     }
 
     #[test]
+    fn empty_no_color_does_not_disable_color() {
+        let caps =
+            RenderCaps::detect_with(None, env(&[("NO_COLOR", ""), ("COLORTERM", "truecolor")]));
+
+        assert_eq!(caps.color_depth, ColorDepth::TrueColor);
+    }
+
+    #[test]
     fn detects_truecolor_before_ansi256() {
         let caps = RenderCaps::detect_with(
             None,
@@ -253,6 +261,14 @@ mod tests {
             RenderCaps::detect_with(Some("block"), env(&[("UNIFLY_CHART_QUALITY", "octant")]));
 
         assert_eq!(caps.glyph_tier, GlyphTier::Octant);
+    }
+
+    #[test]
+    fn invalid_env_chart_quality_falls_back_to_config() {
+        let caps =
+            RenderCaps::detect_with(Some("block"), env(&[("UNIFLY_CHART_QUALITY", "crystal")]));
+
+        assert_eq!(caps.glyph_tier, GlyphTier::Block);
     }
 
     #[test]
