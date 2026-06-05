@@ -491,6 +491,7 @@ fn resolve_address_group_id(
 mod tests {
     use super::{CreatePolicyInput, PolicyFilterInput, UpdatePolicyInput, parse_reorder_zone_pair};
     use crate::cli::error::CliError;
+    use unifly_api::model::FirewallAction as ModelFirewallAction;
     use unifly_api::{EntityId, PortSpec, TrafficFilterSpec};
 
     #[test]
@@ -600,6 +601,21 @@ mod tests {
     }
 
     #[test]
+    fn create_policy_input_accepts_lowercase_action() {
+        let input: CreatePolicyInput = serde_json::from_value(serde_json::json!({
+            "name": "Allow Awair",
+            "action": "allow",
+            "source_zone_id": "d2864b8e-56fb-4945-b69f-6d424fa5b248",
+            "destination_zone_id": "5888bc93-aaae-4242-ae2f-2050d76211fd"
+        }))
+        .expect("lowercase action should deserialize");
+
+        let request = input.into_request();
+
+        assert_eq!(request.action, ModelFirewallAction::Allow);
+    }
+
+    #[test]
     fn policy_filter_input_rejects_shorthand_plus_full_filter() {
         let mut input: PolicyFilterInput = serde_json::from_value(serde_json::json!({
             "dst_ip": ["10.0.0.1"],
@@ -627,6 +643,31 @@ mod tests {
         .expect("update group shorthand should deserialize");
 
         assert!(input.filters.has_group_refs());
+    }
+
+    #[test]
+    fn update_policy_input_deserializes_dst_port_filter() {
+        let mut input: UpdatePolicyInput = serde_json::from_value(serde_json::json!({
+            "dst_port": ["80", "443"]
+        }))
+        .expect("update port shorthand should deserialize");
+
+        input
+            .filters
+            .resolve_inline_filters()
+            .expect("port shorthand should resolve");
+        let request = input.into_request();
+
+        let Some(TrafficFilterSpec::Port {
+            ports: PortSpec::Values { items, .. },
+        }) = request.destination_filter
+        else {
+            panic!(
+                "expected destination port filter, got {:?}",
+                request.destination_filter
+            );
+        };
+        assert_eq!(items, vec!["80", "443"]);
     }
 
     #[test]
