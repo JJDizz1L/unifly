@@ -58,7 +58,7 @@ jobs:
   build-artifacts:
     name: Build (${{ matrix.build }})
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [ci, windows-smoke]
+    needs: [ci, windows-smoke, maintainability]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

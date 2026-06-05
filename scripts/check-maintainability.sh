@@ -29,6 +29,12 @@ check_no_complexity_allows() {
   local path=$1
   local pattern='#!?\[(allow|expect)\(clippy::(too_many_lines|cognitive_complexity)'
 
+  if [[ ! -e "$path" ]]; then
+    printf 'missing complexity hotspot: %s\n' "$path" >&2
+    fail=1
+    return
+  fi
+
   if command -v rg >/dev/null 2>&1; then
     if rg -n "$pattern" "$path"; then
       printf 'complexity suppression found in maintainability hotspot: %s\n' "$path" >&2
