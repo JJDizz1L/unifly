@@ -33,8 +33,8 @@ install-cli:
 
 # ── Quality ─────────────────────────────────────────────────────
 
-# Run all checks (lint + test + clippy)
-check: lint clippy test
+# Run all checks (format + maintainability + clippy + test)
+check: fmt-check maintainability clippy test
 
 # Run clippy with workspace lints
 clippy:
@@ -56,8 +56,12 @@ fmt-check:
     cargo fmt --all -- --check
     npx prettier --check .
 
-# Lint = format check + clippy
-lint: fmt-check clippy
+# Check maintainability hotspots for line-count regressions
+maintainability:
+    scripts/check-maintainability.sh
+
+# Lint = format check + maintainability + clippy
+lint: fmt-check maintainability clippy
 
 # ── Test ────────────────────────────────────────────────────────
 

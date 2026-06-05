@@ -142,7 +142,7 @@ Unit tests are inline in source files under `#[cfg(test)] mod tests`.
 3. **Implement** your changes with tests where applicable
 4. **Run the CI gate locally** before pushing:
    ```bash
-   just check               # fmt-check + clippy + test (the canonical gate)
+   just check               # fmt-check + maintainability + clippy + test
    ```
 5. **Open a PR** targeting `main`
 6. Describe what changed and why. Link the relevant issue if one exists.

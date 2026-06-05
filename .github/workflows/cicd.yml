@@ -46,6 +46,14 @@ jobs:
       - name: Build workspace on Windows
         run: cargo build --workspace --locked --target x86_64-pc-windows-msvc
 
+  maintainability:
+    name: Maintainability Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check maintainability hotspots
+        run: scripts/check-maintainability.sh
+
   # ── Build Artifacts ────────────────────────────────────────────
   build-artifacts:
     name: Build (${{ matrix.build }})

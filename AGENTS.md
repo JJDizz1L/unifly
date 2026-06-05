@@ -46,7 +46,7 @@ The project uses **just** for task orchestration. All recipes live in the
 
 ```bash
 # The canonical "before commit" gate
-just check              # fmt-check + clippy + test
+just check              # fmt-check + maintainability + clippy + test
 
 # Individual gates
 just fmt-check          # nightly rustfmt, read-only
