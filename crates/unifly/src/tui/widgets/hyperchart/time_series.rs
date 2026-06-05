@@ -281,7 +281,10 @@ impl FillStyle {
         match self {
             Self::None => None,
             Self::Solid(color) => Some(color),
-            Self::Gradient(gradient) => gradient.bands(caps, 3).into_iter().next(),
+            Self::Gradient(gradient) => {
+                let bands = gradient.bands(caps, 3);
+                bands.get(1).copied().or_else(|| bands.first().copied())
+            }
         }
     }
 
@@ -462,6 +465,15 @@ mod tests {
             .renderer(Renderer::Canvas { gutter_width: 7 })
             .render_caps(test_caps(GlyphTier::Octant));
         let _ = render_chart(widget, 80, 16);
+    }
+
+    #[test]
+    fn gradient_chart_color_uses_representative_mid_band() {
+        let color = FillStyle::Gradient(ChartGradient::new(Color::Black, Color::Red))
+            .chart_color(test_caps(GlyphTier::Braille))
+            .expect("gradient should produce a chart color");
+
+        assert_ne!(color, Color::Black);
     }
 
     #[test]

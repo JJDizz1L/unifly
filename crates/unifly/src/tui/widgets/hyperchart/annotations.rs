@@ -91,3 +91,61 @@ fn render_marker_value(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use ratatui::text::Line;
+
+    use super::super::scene::GridSpec;
+    use super::*;
+    use crate::tui::widgets::hyperchart::{Baseline, Domain, Series, XAxis};
+
+    fn buffer_text(buf: &Buffer) -> String {
+        (0..buf.area().height)
+            .map(|y| {
+                (0..buf.area().width)
+                    .filter_map(|x| buf.cell((x, y)).map(|cell| cell.symbol().to_string()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn now_annotation_renders_value_when_there_is_room_on_the_right() {
+        let series: [Series<'_>; 0] = [];
+        let chart = HyperChart::new(Line::raw(""), &series, (0.0, 10.0), 1_024.0)
+            .domain(Domain::Rate)
+            .baseline(Baseline::Zero { y_max: 1_024.0 });
+        let plot_area = Rect::new(0, 0, 24, 4);
+        let mut buf = Buffer::empty(plot_area);
+        let scene = ChartScene {
+            x_axis: XAxis::Hidden,
+            bounds: PlotBounds {
+                x_min: 0.0,
+                x_max: 10.0,
+                y_min: 0.0,
+                y_max: 1_024.0,
+            },
+            baseline: Baseline::Zero { y_max: 1_024.0 },
+            series: Vec::new(),
+            grid: GridSpec { tick_count: 4 },
+            annotations: vec![Annotation {
+                kind: AnnotationKind::Now,
+                x: 2.0,
+                y: 1_024.0,
+                transformed_y: 1_024.0,
+                color: Color::Cyan,
+            }],
+        };
+
+        render(&chart, &scene, plot_area, &mut buf);
+
+        let text = buffer_text(&buf);
+        assert!(text.contains("●"));
+        assert!(text.contains("─"));
+    }
+}
