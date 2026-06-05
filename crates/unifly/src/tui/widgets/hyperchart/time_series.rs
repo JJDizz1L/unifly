@@ -6,24 +6,19 @@
 //! supports theme-native gradients, mirror TX/RX baselines, gridlines, x-axis
 //! labels, gap-aware series, and terminal capability fallbacks.
 
-use chrono::{DateTime, Utc};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph, Widget};
+use ratatui::widgets::Widget;
 
 use super::model::{Baseline, Domain, FillStyle, Series, SeriesData, SeriesDirection, XAxis};
-use super::scene::{Annotation, AnnotationKind, ChartScene, GridSpec, PlotBounds, SceneSeries};
-use super::{axis, block, empty};
+use super::scene::{
+    self, Annotation, AnnotationKind, ChartScene, GridSpec, PlotBounds, SceneSeries,
+};
+use super::{axis, block, canvas, empty, tiled};
 use crate::tui::render_caps::{self, RenderCaps};
 use crate::tui::theme;
-
-const X_AXIS_TICK_COUNT: usize = 4;
-const MIN_HEIGHT_FOR_X_AXIS: u16 = 7;
-const MARKER_VALUE_WIDTH: u16 = 9;
 
 /// Rendering back-end for [`HyperChart`].
 #[derive(Debug, Clone, Copy)]
@@ -132,8 +127,16 @@ impl<'a> HyperChart<'a> {
         self
     }
 
-    fn caps(&self) -> RenderCaps {
+    pub(super) fn caps(&self) -> RenderCaps {
         self.render_caps.unwrap_or_else(render_caps::current)
+    }
+
+    pub(super) fn x_axis_kind(&self) -> XAxis {
+        self.x_axis
+    }
+
+    pub(super) fn tick_count_value(&self) -> usize {
+        self.tick_count
     }
 
     fn is_empty(&self) -> bool {
@@ -171,7 +174,7 @@ impl<'a> HyperChart<'a> {
         }
     }
 
-    fn scene(&self) -> ChartScene<'_> {
+    pub(super) fn scene(&self) -> ChartScene<'_> {
         let bounds = self.plot_bounds();
         ChartScene {
             x_axis: self.x_axis,
@@ -195,7 +198,7 @@ impl<'a> HyperChart<'a> {
         }
     }
 
-    fn build_y_labels(&self, max_value: f64) -> Vec<Span<'static>> {
+    pub(super) fn build_y_labels(&self, max_value: f64) -> Vec<Span<'static>> {
         let axis_style = Style::default().fg(theme::border_unfocused());
         match self.domain {
             Domain::Rate => {
@@ -207,387 +210,10 @@ impl<'a> HyperChart<'a> {
         }
     }
 
-    fn format_value(&self, value: f64) -> String {
+    pub(super) fn format_value(&self, value: f64) -> String {
         match self.domain {
             Domain::Rate => crate::tui::widgets::bytes_fmt::fmt_rate_axis(value),
             Domain::Count => format!("{value:.0}"),
-        }
-    }
-
-    fn render_tiled(self, area: Rect, buf: &mut Buffer) {
-        let scene = self.scene();
-        let bounds = scene.bounds;
-        let axis_style = Style::default().fg(theme::border_unfocused());
-        let fill_density = (usize::from(area.width.saturating_sub(8)) * 3).max(120);
-        let caps = self.caps();
-
-        let line_buffers: Vec<Vec<(f64, f64)>> = scene
-            .series
-            .iter()
-            .map(|series| {
-                series
-                    .data
-                    .visible_segments()
-                    .into_iter()
-                    .flatten()
-                    .collect()
-            })
-            .collect();
-        let fill_buffers: Vec<Vec<(f64, f64)>> = line_buffers
-            .iter()
-            .map(|points| axis::interpolate_fill(points, fill_density))
-            .collect();
-
-        let mut datasets: Vec<Dataset> = Vec::new();
-        for (series, fill_buf) in scene.series.iter().zip(fill_buffers.iter()) {
-            let Some(color) = series.fill.chart_color(caps) else {
-                continue;
-            };
-            datasets.push(
-                Dataset::default()
-                    .marker(Marker::HalfBlock)
-                    .graph_type(GraphType::Bar)
-                    .style(Style::default().fg(color))
-                    .data(fill_buf),
-            );
-        }
-
-        for (series, data) in scene.series.iter().zip(line_buffers.iter()) {
-            datasets.push(
-                Dataset::default()
-                    .name(series.name)
-                    .marker(caps.glyph_tier.marker())
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(series.line_color))
-                    .data(data),
-            );
-        }
-
-        let y_labels = self.build_y_labels(bounds.y_max);
-        let chart = Chart::new(datasets)
-            .x_axis(
-                Axis::default()
-                    .bounds([bounds.x_min, bounds.x_max])
-                    .style(axis_style),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([bounds.y_min, bounds.y_max])
-                    .labels(y_labels)
-                    .style(axis_style),
-            );
-
-        chart.render(area, buf);
-    }
-
-    fn render_canvas(self, area: Rect, buf: &mut Buffer, gutter_width: u16) {
-        let has_x_axis =
-            !matches!(self.x_axis, XAxis::Hidden) && area.height >= MIN_HEIGHT_FOR_X_AXIS;
-        let rows = if has_x_axis {
-            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area)
-        } else {
-            Layout::vertical([Constraint::Min(1)]).split(area)
-        };
-        let chart_area = rows[0];
-        let x_axis_area = has_x_axis.then(|| rows[1]);
-        let layout = Layout::horizontal([Constraint::Length(gutter_width), Constraint::Min(1)])
-            .split(chart_area);
-        let gutter_area = layout[0];
-        let plot_area = layout[1];
-        let scene = self.scene();
-        let bounds = scene.bounds;
-        let caps = self.caps();
-
-        self.render_y_gutter(gutter_area, plot_area, &scene, buf);
-
-        #[cfg(feature = "tui-graphics")]
-        if caps.graphics_protocol.is_pixels() && render_graphics_scene(&scene, plot_area, buf) {
-            self.render_annotations(&scene, plot_area, buf);
-            if let Some(axis_area) = x_axis_area {
-                self.render_x_axis(axis_area, plot_area, bounds, buf);
-            }
-            return;
-        }
-
-        let plot_density = (usize::from(plot_area.width.max(1)) * 4).max(160);
-        let paths: Vec<Vec<Vec<(f64, f64)>>> = scene
-            .series
-            .iter()
-            .map(|series| {
-                series
-                    .data
-                    .visible_segments()
-                    .into_iter()
-                    .map(|segment| axis::interpolate_fill(&segment, plot_density))
-                    .collect()
-            })
-            .collect();
-
-        let canvas = Canvas::default()
-            .background_color(theme::bg_base())
-            .marker(caps.glyph_tier.marker())
-            .x_bounds([bounds.x_min, bounds.x_max])
-            .y_bounds([bounds.y_min, bounds.y_max])
-            .paint(|ctx| {
-                Self::draw_grid(ctx, &scene);
-
-                for (series, series_paths) in scene.series.iter().zip(paths.iter()) {
-                    let Some(bands) = series.fill.bands(caps, usize::from(plot_area.height)) else {
-                        continue;
-                    };
-                    for path in series_paths {
-                        for &(x, y) in path {
-                            let y = scene.transform_y(series, y);
-                            draw_gradient_column(ctx, x, y, &bands);
-                        }
-                    }
-                }
-
-                ctx.layer();
-
-                for (series, series_paths) in scene.series.iter().zip(paths.iter()) {
-                    for path in series_paths {
-                        for pair in path.windows(2) {
-                            let [(x1, y1), (x2, y2)] = pair else {
-                                continue;
-                            };
-                            ctx.draw(&CanvasLine {
-                                x1: *x1,
-                                y1: scene.transform_y(series, *y1),
-                                x2: *x2,
-                                y2: scene.transform_y(series, *y2),
-                                color: series.line_color,
-                            });
-                        }
-                    }
-                }
-            });
-
-        canvas.render(plot_area, buf);
-        self.render_annotations(&scene, plot_area, buf);
-        if let Some(axis_area) = x_axis_area {
-            self.render_x_axis(axis_area, plot_area, bounds, buf);
-        }
-    }
-
-    fn draw_grid(ctx: &mut ratatui::widgets::canvas::Context<'_>, scene: &ChartScene<'_>) {
-        let grid_color = theme::border_unfocused();
-        let baseline_color = theme::border_unfocused();
-
-        for y in scene.gridlines() {
-            ctx.draw(&CanvasLine {
-                x1: scene.bounds.x_min,
-                y1: y,
-                x2: scene.bounds.x_max,
-                y2: y,
-                color: grid_color,
-            });
-        }
-
-        ctx.draw(&CanvasLine {
-            x1: scene.bounds.x_min,
-            y1: 0.0,
-            x2: scene.bounds.x_max,
-            y2: 0.0,
-            color: baseline_color,
-        });
-    }
-
-    fn render_y_gutter(
-        &self,
-        gutter_area: Rect,
-        plot_area: Rect,
-        scene: &ChartScene<'_>,
-        buf: &mut Buffer,
-    ) {
-        match scene.baseline {
-            Baseline::Zero { y_max } => {
-                let labels = self.build_y_labels(y_max);
-                let divisions = self.tick_count.saturating_sub(1).max(1);
-                for (idx, label) in labels.iter().enumerate() {
-                    let y = y_max * fraction(idx, divisions);
-                    let row = y_to_row(plot_area, scene.bounds, y);
-                    Paragraph::new(Line::from(label.clone())).render(
-                        Rect {
-                            x: gutter_area.x,
-                            y: row,
-                            width: gutter_area.width,
-                            height: 1,
-                        },
-                        buf,
-                    );
-                }
-            }
-            Baseline::Mirror {
-                upper_max,
-                lower_max,
-                upper_label,
-                lower_label,
-            } => {
-                self.render_mirror_labels(
-                    gutter_area,
-                    plot_area,
-                    scene.bounds,
-                    upper_max,
-                    true,
-                    buf,
-                );
-                self.render_mirror_labels(
-                    gutter_area,
-                    plot_area,
-                    scene.bounds,
-                    lower_max,
-                    false,
-                    buf,
-                );
-
-                let baseline_row = y_to_row(plot_area, scene.bounds, 0.0);
-                let label_style = Style::default().fg(theme::border_unfocused());
-                if baseline_row > plot_area.y {
-                    render_text(
-                        buf,
-                        Rect {
-                            x: gutter_area.x,
-                            y: baseline_row - 1,
-                            width: gutter_area.width,
-                            height: 1,
-                        },
-                        upper_label,
-                        label_style,
-                    );
-                }
-                if baseline_row + 1 < plot_area.y + plot_area.height {
-                    render_text(
-                        buf,
-                        Rect {
-                            x: gutter_area.x,
-                            y: baseline_row + 1,
-                            width: gutter_area.width,
-                            height: 1,
-                        },
-                        lower_label,
-                        label_style,
-                    );
-                }
-            }
-        }
-    }
-
-    fn render_mirror_labels(
-        &self,
-        gutter_area: Rect,
-        plot_area: Rect,
-        bounds: PlotBounds,
-        max_value: f64,
-        upper: bool,
-        buf: &mut Buffer,
-    ) {
-        let labels = self.build_y_labels(max_value);
-        let divisions = self.tick_count.saturating_sub(1).max(1);
-        for (idx, label) in labels.iter().enumerate().skip(1) {
-            let value = max_value * fraction(idx, divisions);
-            let signed_value = if upper { value } else { -value };
-            let row = y_to_row(plot_area, bounds, signed_value);
-            Paragraph::new(Line::from(label.clone())).render(
-                Rect {
-                    x: gutter_area.x,
-                    y: row,
-                    width: gutter_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
-    }
-
-    fn render_x_axis(
-        &self,
-        axis_area: Rect,
-        plot_area: Rect,
-        bounds: PlotBounds,
-        buf: &mut Buffer,
-    ) {
-        let axis_style = Style::default().fg(theme::border_unfocused());
-        let mut occupied_until = axis_area.x;
-        for (idx, (x, label)) in self.x_labels(bounds).iter().enumerate() {
-            let column = x_to_col(plot_area, bounds, *x);
-            let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
-            let mut start = column.saturating_sub(width / 2);
-            if idx + 1 == X_AXIS_TICK_COUNT {
-                start = column.saturating_sub(width.saturating_sub(1));
-            }
-            start = start.max(plot_area.x);
-            let end = start
-                .saturating_add(width)
-                .min(plot_area.x + plot_area.width);
-            if end <= occupied_until || start >= plot_area.x + plot_area.width {
-                continue;
-            }
-
-            render_text(
-                buf,
-                Rect {
-                    x: start,
-                    y: axis_area.y,
-                    width: end - start,
-                    height: 1,
-                },
-                label,
-                axis_style,
-            );
-            occupied_until = end.saturating_add(1);
-        }
-    }
-
-    fn x_labels(&self, bounds: PlotBounds) -> Vec<(f64, String)> {
-        let divisions = X_AXIS_TICK_COUNT.saturating_sub(1).max(1);
-        (0..X_AXIS_TICK_COUNT)
-            .map(|idx| {
-                let t = fraction(idx, divisions);
-                let x = bounds.x_min + (bounds.x_max - bounds.x_min) * t;
-                (
-                    x,
-                    self.format_x_label(x, bounds.x_max, idx + 1 == X_AXIS_TICK_COUNT),
-                )
-            })
-            .collect()
-    }
-
-    fn format_x_label(&self, x: f64, x_max: f64, is_last: bool) -> String {
-        match self.x_axis {
-            XAxis::Hidden => String::new(),
-            XAxis::Relative { sample_interval } => {
-                if is_last {
-                    return "now".into();
-                }
-                let seconds = ((x_max - x) * sample_interval.as_secs_f64()).round();
-                format_relative_offset(seconds)
-            }
-            XAxis::Epoch => {
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    clippy::as_conversions
-                )]
-                let epoch = x.round() as i64;
-                DateTime::<Utc>::from_timestamp(epoch, 0).map_or_else(
-                    || format!("{x:.0}"),
-                    |time| time.format("%H:%M").to_string(),
-                )
-            }
-        }
-    }
-
-    fn render_annotations(&self, scene: &ChartScene<'_>, plot_area: Rect, buf: &mut Buffer) {
-        for annotation in &scene.annotations {
-            let symbol = match annotation.kind {
-                AnnotationKind::Now => "●",
-                AnnotationKind::Peak => "◆",
-            };
-            Self::render_point_marker(symbol, *annotation, plot_area, scene.bounds, buf);
-            if annotation.kind == AnnotationKind::Now {
-                self.render_marker_value(*annotation, plot_area, scene.bounds, buf);
-            }
         }
     }
 
@@ -626,84 +252,13 @@ impl<'a> HyperChart<'a> {
             kind,
             x,
             y,
-            transformed_y: transform_value(self.baseline, series.direction, y),
+            transformed_y: scene::transform_y(self.baseline, series.direction, y),
             color: series.line_color,
         })
-    }
-
-    fn render_point_marker(
-        symbol: &str,
-        point: Annotation,
-        plot_area: Rect,
-        bounds: PlotBounds,
-        buf: &mut Buffer,
-    ) {
-        let column = x_to_col(plot_area, bounds, point.x);
-        let row = y_to_row(plot_area, bounds, point.transformed_y);
-        render_text(
-            buf,
-            Rect {
-                x: column,
-                y: row,
-                width: 1,
-                height: 1,
-            },
-            symbol,
-            Style::default().fg(point.color),
-        );
-    }
-
-    fn render_marker_value(
-        &self,
-        point: Annotation,
-        plot_area: Rect,
-        bounds: PlotBounds,
-        buf: &mut Buffer,
-    ) {
-        let column = x_to_col(plot_area, bounds, point.x);
-        let row = y_to_row(plot_area, bounds, point.transformed_y);
-        let label = format!("─ {}", self.format_value(point.y));
-        let style = Style::default().fg(point.color);
-        let right_x = column.saturating_add(1);
-        if right_x + MARKER_VALUE_WIDTH <= plot_area.x + plot_area.width {
-            render_text(
-                buf,
-                Rect {
-                    x: right_x,
-                    y: row,
-                    width: MARKER_VALUE_WIDTH,
-                    height: 1,
-                },
-                &label,
-                style,
-            );
-            return;
-        }
-
-        if column >= plot_area.x + MARKER_VALUE_WIDTH {
-            render_text(
-                buf,
-                Rect {
-                    x: column - MARKER_VALUE_WIDTH,
-                    y: row,
-                    width: MARKER_VALUE_WIDTH,
-                    height: 1,
-                },
-                &label,
-                style,
-            );
-        }
     }
 }
 
 impl Widget for HyperChart<'_> {
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::as_conversions,
-        clippy::too_many_lines
-    )]
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = block::standard(self.title.clone(), self.focused);
         let inner = block.inner(area);
@@ -715,14 +270,14 @@ impl Widget for HyperChart<'_> {
         }
 
         match self.renderer {
-            Renderer::Tiled => self.render_tiled(inner, buf),
-            Renderer::Canvas { gutter_width } => self.render_canvas(inner, buf, gutter_width),
+            Renderer::Tiled => tiled::render(&self, inner, buf),
+            Renderer::Canvas { gutter_width } => canvas::render(&self, inner, buf, gutter_width),
         }
     }
 }
 
 impl FillStyle {
-    fn chart_color(self, caps: RenderCaps) -> Option<Color> {
+    pub(super) fn chart_color(self, caps: RenderCaps) -> Option<Color> {
         match self {
             Self::None => None,
             Self::Solid(color) => Some(color),
@@ -730,7 +285,7 @@ impl FillStyle {
         }
     }
 
-    fn bands(self, caps: RenderCaps, height: usize) -> Option<Vec<Color>> {
+    pub(super) fn bands(self, caps: RenderCaps, height: usize) -> Option<Vec<Color>> {
         match self {
             Self::None => None,
             Self::Solid(color) => Some(vec![color]),
@@ -739,32 +294,8 @@ impl FillStyle {
     }
 }
 
-fn draw_gradient_column(
-    ctx: &mut ratatui::widgets::canvas::Context<'_>,
-    x: f64,
-    y: f64,
-    bands: &[Color],
-) {
-    if y.abs() < f64::EPSILON || bands.is_empty() {
-        return;
-    }
-
-    let divisions = bands.len();
-    for (idx, color) in bands.iter().enumerate() {
-        let start = fraction(idx, divisions);
-        let end = fraction(idx + 1, divisions);
-        ctx.draw(&CanvasLine {
-            x1: x,
-            y1: y * start,
-            x2: x,
-            y2: y * end,
-            color: *color,
-        });
-    }
-}
-
 #[cfg(feature = "tui-graphics")]
-fn render_graphics_scene(scene: &ChartScene<'_>, area: Rect, buf: &mut Buffer) -> bool {
+pub(super) fn render_graphics_scene(scene: &ChartScene<'_>, area: Rect, buf: &mut Buffer) -> bool {
     use ratatui::layout::Size;
 
     use crate::tui::graphics::CachedChart;
@@ -1040,64 +571,6 @@ fn hash_f64(value: f64, state: &mut impl std::hash::Hasher) {
     use std::hash::Hash;
 
     value.to_bits().hash(state);
-}
-
-fn transform_value(baseline: Baseline<'_>, direction: SeriesDirection, value: f64) -> f64 {
-    match (baseline, direction) {
-        (Baseline::Mirror { lower_max, .. }, SeriesDirection::Down) => -value.min(lower_max),
-        (Baseline::Mirror { upper_max, .. }, SeriesDirection::Up) => value.min(upper_max),
-        _ => value,
-    }
-}
-
-fn fraction(numerator: usize, denominator: usize) -> f64 {
-    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-    {
-        numerator as f64 / denominator as f64
-    }
-}
-
-fn y_to_row(area: Rect, bounds: PlotBounds, y: f64) -> u16 {
-    let span = (bounds.y_max - bounds.y_min).max(1.0);
-    let rows = area.height.saturating_sub(1);
-    let ratio = ((bounds.y_max - y) / span).clamp(0.0, 1.0);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::as_conversions
-    )]
-    {
-        area.y + (f64::from(rows) * ratio).round() as u16
-    }
-}
-
-fn x_to_col(area: Rect, bounds: PlotBounds, x: f64) -> u16 {
-    let span = (bounds.x_max - bounds.x_min).max(1.0);
-    let columns = area.width.saturating_sub(1);
-    let ratio = ((x - bounds.x_min) / span).clamp(0.0, 1.0);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::as_conversions
-    )]
-    {
-        area.x + (f64::from(columns) * ratio).round() as u16
-    }
-}
-
-fn render_text(buf: &mut Buffer, area: Rect, text: &str, style: Style) {
-    Paragraph::new(Line::from(Span::styled(text.to_owned(), style))).render(area, buf);
-}
-
-fn format_relative_offset(seconds: f64) -> String {
-    let seconds = seconds.max(0.0).round();
-    if seconds < 60.0 {
-        format!("-{seconds:.0}s")
-    } else if seconds < 3_600.0 {
-        format!("-{:.0}m", seconds / 60.0)
-    } else {
-        format!("-{:.0}h", seconds / 3_600.0)
-    }
 }
 
 #[cfg(test)]

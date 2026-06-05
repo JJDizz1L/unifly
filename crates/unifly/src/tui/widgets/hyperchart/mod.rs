@@ -13,17 +13,21 @@
 //! ([`empty`]), and block styling ([`block`]), so any visual refinement
 //! lands in one place.
 
+mod annotations;
 pub mod axis;
 pub mod bars;
 pub mod block;
+mod canvas;
 pub mod color;
 pub mod empty;
 pub mod faceplate;
+mod geometry;
 pub mod heatmap;
 pub mod model;
 #[cfg(feature = "tui-graphics")]
 pub mod raster;
 pub mod scene;
+mod tiled;
 pub mod time_series;
 
 pub use bars::{Denominator, HyperBars, Row, ValueFormat};

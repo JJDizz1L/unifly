@@ -57,11 +57,7 @@ impl ChartScene<'_> {
     }
 
     pub fn transform_y(&self, series: &SceneSeries<'_>, value: f64) -> f64 {
-        match (self.baseline, series.direction) {
-            (Baseline::Mirror { lower_max, .. }, SeriesDirection::Down) => -value.min(lower_max),
-            (Baseline::Mirror { upper_max, .. }, SeriesDirection::Up) => value.min(upper_max),
-            _ => value,
-        }
+        transform_y(self.baseline, series.direction, value)
     }
 
     pub fn gridlines(&self) -> Vec<f64> {
@@ -86,6 +82,14 @@ impl ChartScene<'_> {
             }
         }
         values
+    }
+}
+
+pub(super) fn transform_y(baseline: Baseline<'_>, direction: SeriesDirection, value: f64) -> f64 {
+    match (baseline, direction) {
+        (Baseline::Mirror { lower_max, .. }, SeriesDirection::Down) => -value.min(lower_max),
+        (Baseline::Mirror { upper_max, .. }, SeriesDirection::Up) => value.min(upper_max),
+        _ => value,
     }
 }
 
