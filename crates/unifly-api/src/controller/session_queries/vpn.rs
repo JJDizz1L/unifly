@@ -6,7 +6,7 @@ use crate::model::{
     SiteToSiteVpn, VpnClientConnection, VpnClientProfile, WireGuardPeer,
 };
 
-use super::redact_sensitive_value;
+use super::common::redact_sensitive_value;
 
 impl Controller {
     pub async fn list_site_to_site_vpns(&self) -> Result<Vec<SiteToSiteVpn>, CoreError> {
