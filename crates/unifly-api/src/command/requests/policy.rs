@@ -27,30 +27,6 @@ pub struct CreateFirewallPolicyRequest {
     pub source_filter: Option<TrafficFilterSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_filter: Option<TrafficFilterSpec>,
-
-    // Shorthand fields for --from-file convenience (map to source/destination_filter)
-    #[serde(default, skip_serializing)]
-    pub src_network: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub src_ip: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub src_port: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_network: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_ip: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_port: Option<Vec<String>>,
-
-    // Group reference shorthands (resolved by CLI to source/destination_filter)
-    #[serde(default, skip_serializing)]
-    pub src_port_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub dst_port_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub src_address_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub dst_address_group: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -79,30 +55,6 @@ pub struct UpdateFirewallPolicyRequest {
     pub destination_filter: Option<TrafficFilterSpec>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "logging")]
     pub logging_enabled: Option<bool>,
-
-    // Shorthand fields for --from-file convenience (map to source/destination_filter)
-    #[serde(default, skip_serializing)]
-    pub src_network: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub src_ip: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub src_port: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_network: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_ip: Option<Vec<String>>,
-    #[serde(default, skip_serializing)]
-    pub dst_port: Option<Vec<String>>,
-
-    // Group reference shorthands (resolved by CLI to source/destination_filter)
-    #[serde(default, skip_serializing)]
-    pub src_port_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub dst_port_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub src_address_group: Option<String>,
-    #[serde(default, skip_serializing)]
-    pub dst_address_group: Option<String>,
 }
 
 /// Port-side specification: either inline values or a reference to a
@@ -314,26 +266,11 @@ where
 }
 
 impl CreateFirewallPolicyRequest {
-    /// Convert shorthand `src_ip`/`dst_ip`/`src_port`/`dst_port`/`src_network`/
-    /// `dst_network` fields into the canonical `source_filter`/`destination_filter`.
+    /// Compatibility no-op retained for callers from the pre-0.10 request shape.
     ///
-    /// Returns `Err` if both a shorthand field and the corresponding filter are set,
-    /// or if more than one shorthand family is specified for the same side.
+    /// Policy requests are canonical now; CLI-only shorthand fields are
+    /// normalized before constructing this public API type.
     pub fn resolve_filters(&mut self) -> Result<(), String> {
-        self.source_filter = resolve_side(
-            "src",
-            self.source_filter.take(),
-            self.src_network.take(),
-            self.src_ip.take(),
-            self.src_port.take(),
-        )?;
-        self.destination_filter = resolve_side(
-            "dst",
-            self.destination_filter.take(),
-            self.dst_network.take(),
-            self.dst_ip.take(),
-            self.dst_port.take(),
-        )?;
         Ok(())
     }
 }
@@ -341,73 +278,8 @@ impl CreateFirewallPolicyRequest {
 impl UpdateFirewallPolicyRequest {
     /// Same as [`CreateFirewallPolicyRequest::resolve_filters`].
     pub fn resolve_filters(&mut self) -> Result<(), String> {
-        self.source_filter = resolve_side(
-            "src",
-            self.source_filter.take(),
-            self.src_network.take(),
-            self.src_ip.take(),
-            self.src_port.take(),
-        )?;
-        self.destination_filter = resolve_side(
-            "dst",
-            self.destination_filter.take(),
-            self.dst_network.take(),
-            self.dst_ip.take(),
-            self.dst_port.take(),
-        )?;
         Ok(())
     }
-}
-
-fn resolve_side(
-    prefix: &str,
-    existing: Option<TrafficFilterSpec>,
-    networks: Option<Vec<String>>,
-    ips: Option<Vec<String>>,
-    ports: Option<Vec<String>>,
-) -> Result<Option<TrafficFilterSpec>, String> {
-    // network + ip is invalid; port can combine with either network or ip
-    if networks.is_some() && ips.is_some() {
-        return Err(format!("cannot combine {prefix}_network and {prefix}_ip"));
-    }
-
-    let has_shorthand = networks.is_some() || ips.is_some() || ports.is_some();
-
-    if has_shorthand && existing.is_some() {
-        return Err(format!(
-            "cannot combine shorthand fields with {prefix_filter}",
-            prefix_filter = if prefix == "src" {
-                "source_filter"
-            } else {
-                "destination_filter"
-            }
-        ));
-    }
-
-    if let Some(existing) = existing {
-        return Ok(Some(existing));
-    }
-
-    let port_spec = ports.map(|items| PortSpec::Values {
-        items,
-        match_opposite: false,
-    });
-
-    Ok(if let Some(network_ids) = networks {
-        Some(TrafficFilterSpec::Network {
-            network_ids,
-            match_opposite: false,
-            ports: port_spec,
-        })
-    } else if let Some(addresses) = ips {
-        Some(TrafficFilterSpec::IpAddress {
-            addresses,
-            match_opposite: false,
-            ports: port_spec,
-        })
-    } else {
-        port_spec.map(|ports| TrafficFilterSpec::Port { ports })
-    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -588,53 +460,8 @@ mod tests {
     use super::{
         CreateAclRuleRequest, CreateFirewallGroupRequest, CreateFirewallPolicyRequest, PortSpec,
         TrafficFilterSpec, UpdateAclRuleRequest, UpdateFirewallGroupRequest,
-        UpdateFirewallPolicyRequest,
     };
     use crate::model::{FirewallAction, FirewallGroupType};
-
-    /// Bug 1 regression: dst_ip and dst_port in --from-file JSON must
-    /// deserialize into the shorthand fields (not be silently dropped).
-    #[test]
-    fn create_firewall_policy_shorthand_fields_deserialize() {
-        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Allow Awair",
-            "action": "Allow",
-            "source_zone_id": "d2864b8e-56fb-4945-b69f-6d424fa5b248",
-            "destination_zone_id": "5888bc93-aaae-4242-ae2f-2050d76211fd",
-            "allow_return_traffic": false,
-            "connection_states": ["NEW"],
-            "dst_ip": ["10.0.40.10"],
-            "dst_port": ["80"]
-        }))
-        .expect("shorthand fields should deserialize");
-
-        assert_eq!(req.dst_ip.as_deref(), Some(&["10.0.40.10".to_owned()][..]));
-        assert_eq!(req.dst_port.as_deref(), Some(&["80".to_owned()][..]));
-        // Filter fields should still be None — resolution happens later
-        assert!(req.destination_filter.is_none());
-    }
-
-    /// Shorthand fields must not leak into serialized output (they are
-    /// internal to --from-file and should never reach the API wire format).
-    #[test]
-    fn create_firewall_policy_shorthand_fields_skip_serializing() {
-        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Test",
-            "action": "Block",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_ip": ["10.0.0.1"]
-        }))
-        .expect("should deserialize");
-
-        let value = serde_json::to_value(&req).expect("should serialize");
-        assert!(value.get("dst_ip").is_none(), "dst_ip must not serialize");
-        assert!(
-            value.get("dst_port").is_none(),
-            "dst_port must not serialize"
-        );
-        assert!(value.get("src_ip").is_none(), "src_ip must not serialize");
-    }
 
     /// The existing source_filter / destination_filter path must still work
     /// for users who write the full TrafficFilterSpec in their JSON files.
@@ -654,110 +481,6 @@ mod tests {
         .expect("full filter spec should deserialize");
 
         assert!(req.destination_filter.is_some());
-        assert!(req.dst_ip.is_none());
-    }
-
-    /// dst_ip + dst_port should combine into IpAddress filter with nested ports
-    #[test]
-    fn resolve_filters_combines_dst_ip_and_dst_port() {
-        let mut req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Allow Awair",
-            "action": "Allow",
-            "source_zone_id": "d2864b8e-56fb-4945-b69f-6d424fa5b248",
-            "destination_zone_id": "5888bc93-aaae-4242-ae2f-2050d76211fd",
-            "dst_ip": ["10.0.40.10"],
-            "dst_port": ["80"]
-        }))
-        .expect("should deserialize");
-
-        req.resolve_filters().expect("ip + port should be allowed");
-        match &req.destination_filter {
-            Some(TrafficFilterSpec::IpAddress {
-                addresses, ports, ..
-            }) => {
-                assert_eq!(addresses, &["10.0.40.10"]);
-                let Some(PortSpec::Values { items, .. }) = ports else {
-                    panic!("expected PortSpec::Values, got {ports:?}")
-                };
-                assert_eq!(items, &["80"]);
-            }
-            other => panic!("expected IpAddress filter with ports, got {other:?}"),
-        }
-    }
-
-    /// dst_network + dst_ip is still invalid (two primary filter types)
-    #[test]
-    fn resolve_filters_rejects_network_plus_ip() {
-        let mut req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Conflict",
-            "action": "Block",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_network": ["net-uuid"],
-            "dst_ip": ["10.0.0.1"]
-        }))
-        .expect("should deserialize");
-
-        assert!(req.resolve_filters().is_err());
-    }
-
-    #[test]
-    fn resolve_filters_converts_dst_ip_only() {
-        let mut req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Allow Awair",
-            "action": "Allow",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_ip": ["10.0.40.10"]
-        }))
-        .expect("should deserialize");
-
-        req.resolve_filters().expect("should resolve");
-        match &req.destination_filter {
-            Some(TrafficFilterSpec::IpAddress { addresses, .. }) => {
-                assert_eq!(addresses, &["10.0.40.10"]);
-            }
-            other => panic!("expected IpAddress filter, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn resolve_filters_rejects_shorthand_plus_full_filter() {
-        let mut req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Conflict",
-            "action": "Block",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_ip": ["10.0.0.1"],
-            "destination_filter": {
-                "type": "ip_address",
-                "addresses": ["10.0.0.2"]
-            }
-        }))
-        .expect("should deserialize");
-
-        let err = req.resolve_filters().expect_err("should conflict");
-        assert!(err.contains("cannot combine"), "got: {err}");
-    }
-
-    #[test]
-    fn resolve_filters_update_request_works() {
-        let mut req: UpdateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "dst_port": ["443", "8443"]
-        }))
-        .expect("should deserialize");
-
-        req.resolve_filters().expect("should resolve");
-        let Some(TrafficFilterSpec::Port {
-            ports: PortSpec::Values { items, .. },
-        }) = &req.destination_filter
-        else {
-            panic!(
-                "expected Port filter with values, got {:?}",
-                req.destination_filter
-            )
-        };
-        assert_eq!(items, &["443", "8443"]);
     }
 
     /// Pre-PortSpec JSON files used a flat `Vec<String>` for `Port.ports`
@@ -863,67 +586,6 @@ mod tests {
             Some("DEVICE")
         );
         assert_eq!(value.get("rule_type"), None);
-    }
-
-    // ── Group shorthand tests ──────────────────────────────────────
-
-    #[test]
-    fn group_shorthand_fields_deserialize() {
-        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "HA IoT Services",
-            "action": "Allow",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_port_group": "HA",
-            "src_address_group": "Cloud IOT"
-        }))
-        .expect("group shorthands should deserialize");
-
-        assert_eq!(req.dst_port_group.as_deref(), Some("HA"));
-        assert_eq!(req.src_address_group.as_deref(), Some("Cloud IOT"));
-        assert!(req.destination_filter.is_none());
-        assert!(req.source_filter.is_none());
-    }
-
-    #[test]
-    fn group_shorthand_fields_skip_serializing() {
-        let req: CreateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "name": "Test",
-            "action": "Allow",
-            "source_zone_id": "aaa",
-            "destination_zone_id": "bbb",
-            "dst_port_group": "HA",
-            "dst_address_group": "Cloud IOT"
-        }))
-        .expect("should deserialize");
-
-        let value = serde_json::to_value(&req).expect("should serialize");
-        assert!(
-            value.get("dst_port_group").is_none(),
-            "dst_port_group must not serialize"
-        );
-        assert!(
-            value.get("dst_address_group").is_none(),
-            "dst_address_group must not serialize"
-        );
-        assert!(
-            value.get("src_port_group").is_none(),
-            "src_port_group must not serialize"
-        );
-        assert!(
-            value.get("src_address_group").is_none(),
-            "src_address_group must not serialize"
-        );
-    }
-
-    #[test]
-    fn update_group_shorthand_fields_deserialize() {
-        let req: UpdateFirewallPolicyRequest = serde_json::from_value(serde_json::json!({
-            "dst_port_group": "HA"
-        }))
-        .expect("update group shorthand should deserialize");
-
-        assert_eq!(req.dst_port_group.as_deref(), Some("HA"));
     }
 
     /// Firewall-group `--from-file` JSON should accept `members` (mirroring

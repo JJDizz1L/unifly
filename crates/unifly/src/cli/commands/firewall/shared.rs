@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use unifly_api::model::{FirewallAction as ModelFirewallAction, FirewallGroupType};
 use unifly_api::{
     Controller, CreateFirewallPolicyRequest, EntityId, PortSpec, TrafficFilterSpec,
@@ -15,18 +16,236 @@ pub(super) fn map_fw_action(action: &FirewallAction) -> ModelFirewallAction {
     }
 }
 
-pub(super) fn build_filter_spec(
+#[derive(Debug, Deserialize)]
+pub(super) struct CreatePolicyInput {
+    pub name: String,
+    pub action: ModelFirewallAction,
+    #[serde(alias = "source_zone")]
+    pub source_zone_id: EntityId,
+    #[serde(alias = "dest_zone")]
+    pub destination_zone_id: EntityId,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, alias = "logging")]
+    pub logging_enabled: bool,
+    #[serde(default)]
+    pub allow_return_traffic: Option<bool>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub ip_version: Option<String>,
+    #[serde(default)]
+    pub connection_states: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub filters: PolicyFilterInput,
+}
+
+impl CreatePolicyInput {
+    pub(super) fn into_request(self) -> CreateFirewallPolicyRequest {
+        debug_assert!(!self.filters.has_group_refs());
+        let (source_filter, destination_filter) = self.filters.into_filters();
+        CreateFirewallPolicyRequest {
+            name: self.name,
+            action: self.action,
+            source_zone_id: self.source_zone_id,
+            destination_zone_id: self.destination_zone_id,
+            enabled: self.enabled,
+            logging_enabled: self.logging_enabled,
+            allow_return_traffic: self.allow_return_traffic,
+            description: self.description,
+            ip_version: self.ip_version,
+            connection_states: self.connection_states,
+            source_filter,
+            destination_filter,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct UpdatePolicyInput {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub action: Option<ModelFirewallAction>,
+    #[serde(default)]
+    pub allow_return_traffic: Option<bool>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub ip_version: Option<String>,
+    #[serde(default)]
+    pub connection_states: Option<Vec<String>>,
+    #[serde(default, alias = "logging")]
+    pub logging_enabled: Option<bool>,
+    #[serde(flatten)]
+    pub filters: PolicyFilterInput,
+}
+
+impl UpdatePolicyInput {
+    pub(super) fn into_request(self) -> UpdateFirewallPolicyRequest {
+        debug_assert!(!self.filters.has_group_refs());
+        let (source_filter, destination_filter) = self.filters.into_filters();
+        UpdateFirewallPolicyRequest {
+            name: self.name,
+            action: self.action,
+            allow_return_traffic: self.allow_return_traffic,
+            enabled: self.enabled,
+            description: self.description,
+            ip_version: self.ip_version,
+            connection_states: self.connection_states,
+            source_filter,
+            destination_filter,
+            logging_enabled: self.logging_enabled,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct PolicyFilterInput {
+    #[serde(default)]
+    source_filter: Option<TrafficFilterSpec>,
+    #[serde(default)]
+    destination_filter: Option<TrafficFilterSpec>,
+
+    #[serde(default)]
+    src_network: Option<Vec<String>>,
+    #[serde(default)]
+    src_ip: Option<Vec<String>>,
+    #[serde(default)]
+    src_port: Option<Vec<String>>,
+    #[serde(default)]
+    dst_network: Option<Vec<String>>,
+    #[serde(default)]
+    dst_ip: Option<Vec<String>>,
+    #[serde(default)]
+    dst_port: Option<Vec<String>>,
+
+    #[serde(default)]
+    src_port_group: Option<String>,
+    #[serde(default)]
+    dst_port_group: Option<String>,
+    #[serde(default)]
+    src_address_group: Option<String>,
+    #[serde(default)]
+    dst_address_group: Option<String>,
+}
+
+impl PolicyFilterInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_cli(
+        src_network: Option<Vec<String>>,
+        src_ip: Option<Vec<String>>,
+        src_port: Option<Vec<String>>,
+        dst_network: Option<Vec<String>>,
+        dst_ip: Option<Vec<String>>,
+        dst_port: Option<Vec<String>>,
+        src_port_group: Option<String>,
+        dst_port_group: Option<String>,
+        src_address_group: Option<String>,
+        dst_address_group: Option<String>,
+    ) -> Result<Self, CliError> {
+        let mut input = Self {
+            src_network,
+            src_ip,
+            src_port,
+            dst_network,
+            dst_ip,
+            dst_port,
+            src_port_group,
+            dst_port_group,
+            src_address_group,
+            dst_address_group,
+            ..Self::default()
+        };
+        input.resolve_inline_filters()?;
+        Ok(input)
+    }
+
+    pub(super) fn resolve_inline_filters(&mut self) -> Result<(), CliError> {
+        self.source_filter = resolve_filter_side(
+            "src",
+            self.source_filter.take(),
+            self.src_network.take(),
+            self.src_ip.take(),
+            self.src_port.take(),
+        )?;
+        self.destination_filter = resolve_filter_side(
+            "dst",
+            self.destination_filter.take(),
+            self.dst_network.take(),
+            self.dst_ip.take(),
+            self.dst_port.take(),
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn has_group_refs(&self) -> bool {
+        self.src_port_group.is_some()
+            || self.dst_port_group.is_some()
+            || self.src_address_group.is_some()
+            || self.dst_address_group.is_some()
+    }
+
+    pub(super) fn resolve_group_refs(&mut self, controller: &Controller) -> Result<(), CliError> {
+        let groups = controller.firewall_groups_snapshot();
+
+        self.source_filter = merge_groups_into_filter(
+            "src",
+            self.source_filter.take(),
+            self.src_address_group.take(),
+            self.src_port_group.take(),
+            &groups,
+        )?;
+        self.destination_filter = merge_groups_into_filter(
+            "dst",
+            self.destination_filter.take(),
+            self.dst_address_group.take(),
+            self.dst_port_group.take(),
+            &groups,
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn into_filters(self) -> (Option<TrafficFilterSpec>, Option<TrafficFilterSpec>) {
+        (self.source_filter, self.destination_filter)
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn resolve_filter_side(
     field_prefix: &str,
+    existing: Option<TrafficFilterSpec>,
     networks: Option<Vec<String>>,
     ips: Option<Vec<String>>,
     ports: Option<Vec<String>>,
 ) -> Result<Option<TrafficFilterSpec>, CliError> {
-    // network + ip is invalid; port can combine with either
     if networks.is_some() && ips.is_some() {
         return Err(CliError::Validation {
             field: format!("{field_prefix}-filter"),
             reason: format!("cannot combine --{field_prefix}-network and --{field_prefix}-ip"),
         });
+    }
+
+    let has_shorthand = networks.is_some() || ips.is_some() || ports.is_some();
+    if has_shorthand && existing.is_some() {
+        let field_name = if field_prefix == "src" {
+            "source_filter"
+        } else {
+            "destination_filter"
+        };
+        return Err(CliError::Validation {
+            field: format!("{field_prefix}-filter"),
+            reason: format!("cannot combine shorthand fields with {field_name}"),
+        });
+    }
+
+    if let Some(existing) = existing {
+        return Ok(Some(existing));
     }
 
     let port_spec = ports.map(|items| PortSpec::Values {
@@ -66,12 +285,10 @@ pub(super) fn parse_reorder_zone_pair(
     }
 }
 
-/// Merge `src_port_group` / `src_address_group` / `dst_port_group` /
-/// `dst_address_group` shorthands into `source_filter` / `destination_filter`
-/// on a `CreateFirewallPolicyRequest`.
+/// Merge group shorthands into canonical source/destination filters.
 ///
-/// Must be called *after* `resolve_filters()` so the shorthand fields
-/// (`src_ip`, `src_port`, etc.) are already folded into the filter.
+/// Must be called after inline shorthand fields are already folded into
+/// the filter.
 ///
 /// Combinations supported:
 /// * address group alone → `IpMatchingList`
@@ -81,53 +298,6 @@ pub(super) fn parse_reorder_zone_pair(
 ///   port-group becomes the `ports` companion
 /// * existing port-only filter + address group → upgraded to
 ///   `IpMatchingList` carrying the existing port spec
-pub(super) fn resolve_group_refs_create(
-    controller: &Controller,
-    req: &mut CreateFirewallPolicyRequest,
-) -> Result<(), CliError> {
-    let groups = controller.firewall_groups_snapshot();
-
-    req.source_filter = merge_groups_into_filter(
-        "src",
-        req.source_filter.take(),
-        req.src_address_group.take(),
-        req.src_port_group.take(),
-        &groups,
-    )?;
-    req.destination_filter = merge_groups_into_filter(
-        "dst",
-        req.destination_filter.take(),
-        req.dst_address_group.take(),
-        req.dst_port_group.take(),
-        &groups,
-    )?;
-    Ok(())
-}
-
-/// Same as [`resolve_group_refs_create`] but for update requests.
-pub(super) fn resolve_group_refs_update(
-    controller: &Controller,
-    req: &mut UpdateFirewallPolicyRequest,
-) -> Result<(), CliError> {
-    let groups = controller.firewall_groups_snapshot();
-
-    req.source_filter = merge_groups_into_filter(
-        "src",
-        req.source_filter.take(),
-        req.src_address_group.take(),
-        req.src_port_group.take(),
-        &groups,
-    )?;
-    req.destination_filter = merge_groups_into_filter(
-        "dst",
-        req.destination_filter.take(),
-        req.dst_address_group.take(),
-        req.dst_port_group.take(),
-        &groups,
-    )?;
-    Ok(())
-}
-
 fn merge_groups_into_filter(
     side: &str,
     existing: Option<TrafficFilterSpec>,
@@ -319,22 +489,42 @@ fn resolve_address_group_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_filter_spec, parse_reorder_zone_pair};
+    use super::{CreatePolicyInput, PolicyFilterInput, UpdatePolicyInput, parse_reorder_zone_pair};
     use crate::cli::error::CliError;
     use unifly_api::{EntityId, PortSpec, TrafficFilterSpec};
 
     #[test]
-    fn build_filter_spec_accepts_single_filter_family() {
-        let spec = build_filter_spec("src", Some(vec!["lan".into()]), None, None);
-        assert!(matches!(spec, Ok(Some(TrafficFilterSpec::Network { .. }))));
+    fn policy_filter_input_accepts_single_filter_family() {
+        let input = PolicyFilterInput::from_cli(
+            Some(vec!["lan".into()]),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("network filter should resolve");
+        let (source, _) = input.into_filters();
+
+        assert!(matches!(source, Some(TrafficFilterSpec::Network { .. })));
     }
 
     #[test]
-    fn build_filter_spec_rejects_multiple_filter_families() {
-        let err = build_filter_spec(
-            "src",
+    fn policy_filter_input_rejects_multiple_filter_families() {
+        let err = PolicyFilterInput::from_cli(
             Some(vec!["lan".into()]),
             Some(vec!["10.0.0.1".into()]),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
         );
 
@@ -346,16 +536,23 @@ mod tests {
     }
 
     #[test]
-    fn build_filter_spec_combines_ip_and_port() {
-        let spec = build_filter_spec(
-            "dst",
+    fn policy_filter_input_combines_ip_and_port() {
+        let input = PolicyFilterInput::from_cli(
+            None,
+            None,
+            None,
             None,
             Some(vec!["10.0.40.10".into()]),
             Some(vec!["80".into()]),
+            None,
+            None,
+            None,
+            None,
         )
         .expect("ip + port should succeed");
+        let (_, destination) = input.into_filters();
 
-        match spec {
+        match destination {
             Some(TrafficFilterSpec::IpAddress {
                 addresses, ports, ..
             }) => {
@@ -367,6 +564,69 @@ mod tests {
             }
             other => panic!("expected IpAddress with ports, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn create_policy_input_deserializes_shorthand_fields() {
+        let mut input: CreatePolicyInput = serde_json::from_value(serde_json::json!({
+            "name": "Allow Awair",
+            "action": "Allow",
+            "source_zone_id": "d2864b8e-56fb-4945-b69f-6d424fa5b248",
+            "destination_zone_id": "5888bc93-aaae-4242-ae2f-2050d76211fd",
+            "allow_return_traffic": false,
+            "connection_states": ["NEW"],
+            "dst_ip": ["10.0.40.10"],
+            "dst_port": ["80"]
+        }))
+        .expect("shorthand fields should deserialize");
+
+        input
+            .filters
+            .resolve_inline_filters()
+            .expect("ip + port should resolve");
+        let request = input.into_request();
+        match request.destination_filter {
+            Some(TrafficFilterSpec::IpAddress {
+                addresses, ports, ..
+            }) => {
+                assert_eq!(addresses, &["10.0.40.10"]);
+                let Some(PortSpec::Values { items, .. }) = ports else {
+                    panic!("expected PortSpec::Values, got {ports:?}");
+                };
+                assert_eq!(items, &["80"]);
+            }
+            other => panic!("expected IpAddress filter with ports, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_filter_input_rejects_shorthand_plus_full_filter() {
+        let mut input: PolicyFilterInput = serde_json::from_value(serde_json::json!({
+            "dst_ip": ["10.0.0.1"],
+            "destination_filter": {
+                "type": "ip_address",
+                "addresses": ["10.0.0.2"]
+            }
+        }))
+        .expect("input should deserialize");
+
+        let err = input
+            .resolve_inline_filters()
+            .expect_err("should reject mixed filter shapes");
+        match err {
+            CliError::Validation { reason, .. } => assert!(reason.contains("cannot combine")),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_policy_input_deserializes_group_shorthand() {
+        let input: UpdatePolicyInput = serde_json::from_value(serde_json::json!({
+            "dst_port_group": "HA"
+        }))
+        .expect("update group shorthand should deserialize");
+
+        assert!(input.filters.has_group_refs());
     }
 
     #[test]

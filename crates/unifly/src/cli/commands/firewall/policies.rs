@@ -12,8 +12,7 @@ use crate::cli::error::CliError;
 use crate::cli::output;
 
 use super::shared::{
-    build_filter_spec, map_fw_action, parse_reorder_zone_pair, resolve_group_refs_create,
-    resolve_group_refs_update,
+    CreatePolicyInput, PolicyFilterInput, UpdatePolicyInput, map_fw_action, parse_reorder_zone_pair,
 };
 use super::util;
 
@@ -437,7 +436,7 @@ async fn handle_create(
     ip_version: Option<String>,
     after_system: bool,
 ) -> Result<(), CliError> {
-    let mut req = build_create_request(
+    let req = build_create_request(
         controller,
         from_file,
         name,
@@ -462,18 +461,6 @@ async fn handle_create(
         ip_version,
     )
     .await?;
-
-    // Resolve group references (from CLI flags). The from-file path resolves
-    // and consumes its own group fields inside build_create_request; this
-    // catches CLI-flag inputs.
-    if req.src_port_group.is_some()
-        || req.dst_port_group.is_some()
-        || req.src_address_group.is_some()
-        || req.dst_address_group.is_some()
-    {
-        util::ensure_session_access(controller, "firewall policy with group references").await?;
-        resolve_group_refs_create(controller, &mut req)?;
-    }
 
     // allow_return_traffic is only valid for Allow actions — reject if explicitly set
     if req.action != unifly_api::model::FirewallAction::Allow
@@ -518,9 +505,8 @@ async fn handle_create(
 }
 
 /// Construct a `CreateFirewallPolicyRequest` from either a `--from-file`
-/// payload or the CLI-flag inputs. For the from-file path, runs
-/// `resolve_filters` and (if any group fields are set) merges group
-/// references into the canonical filter shape.
+/// payload or the CLI-flag inputs, normalizing CLI-only filter shorthands
+/// before building the public API request.
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 async fn build_create_request(
     controller: &Controller,
@@ -547,27 +533,25 @@ async fn build_create_request(
     ip_version: Option<String>,
 ) -> Result<CreateFirewallPolicyRequest, CliError> {
     if let Some(path) = from_file.as_ref() {
-        let mut req: CreateFirewallPolicyRequest =
-            serde_json::from_value(util::read_json_file(path)?)?;
-        // Fold inline shorthand fields into source/destination_filter
-        // first so resolve_group_refs sees the canonical filter shape and
-        // can merge group references as companions.
-        req.resolve_filters()
-            .map_err(|reason| CliError::Validation {
-                field: "filter".into(),
-                reason,
-            })?;
-        if req.src_port_group.is_some()
-            || req.dst_port_group.is_some()
-            || req.src_address_group.is_some()
-            || req.dst_address_group.is_some()
-        {
-            util::ensure_session_access(controller, "firewall policy with group references")
-                .await?;
-            resolve_group_refs_create(controller, &mut req)?;
-        }
-        Ok(req)
+        let mut input: CreatePolicyInput = serde_json::from_value(util::read_json_file(path)?)?;
+        input.filters.resolve_inline_filters()?;
+        resolve_policy_group_refs(controller, &mut input.filters).await?;
+        Ok(input.into_request())
     } else {
+        let mut filters = PolicyFilterInput::from_cli(
+            src_network,
+            src_ip,
+            src_port,
+            dst_network,
+            dst_ip,
+            dst_port,
+            src_port_group,
+            dst_port_group,
+            src_address_group,
+            dst_address_group,
+        )?;
+        resolve_policy_group_refs(controller, &mut filters).await?;
+        let (source_filter, destination_filter) = filters.into_filters();
         Ok(CreateFirewallPolicyRequest {
             name: name.unwrap_or_default(),
             action: action
@@ -581,20 +565,21 @@ async fn build_create_request(
             description,
             ip_version,
             connection_states: states,
-            source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
-            destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
-            src_network: None,
-            src_ip: None,
-            src_port: None,
-            dst_network: None,
-            dst_ip: None,
-            dst_port: None,
-            src_port_group,
-            dst_port_group,
-            src_address_group,
-            dst_address_group,
+            source_filter,
+            destination_filter,
         })
     }
+}
+
+async fn resolve_policy_group_refs(
+    controller: &Controller,
+    filters: &mut PolicyFilterInput,
+) -> Result<(), CliError> {
+    if filters.has_group_refs() {
+        util::ensure_session_access(controller, "firewall policy with group references").await?;
+        filters.resolve_group_refs(controller)?;
+    }
+    Ok(())
 }
 
 fn report_create_outcome(
@@ -664,50 +649,35 @@ async fn handle_update(
         });
     }
 
-    let mut update = if let Some(path) = from_file.as_ref() {
-        let mut update: UpdateFirewallPolicyRequest =
-            serde_json::from_value(util::read_json_file(path)?)?;
-        update
-            .resolve_filters()
-            .map_err(|reason| CliError::Validation {
-                field: "filter".into(),
-                reason,
-            })?;
-        if update.src_port_group.is_some()
-            || update.dst_port_group.is_some()
-            || update.src_address_group.is_some()
-            || update.dst_address_group.is_some()
-        {
-            util::ensure_session_access(controller, "firewall policy with group references")
-                .await?;
-            resolve_group_refs_update(controller, &mut update)?;
-        }
-        update
+    let update = if let Some(path) = from_file.as_ref() {
+        let mut input: UpdatePolicyInput = serde_json::from_value(util::read_json_file(path)?)?;
+        input.filters.resolve_inline_filters()?;
+        resolve_policy_group_refs(controller, &mut input.filters).await?;
+        input.into_request()
     } else {
-        UpdateFirewallPolicyRequest {
-            allow_return_traffic,
-            source_filter: build_filter_spec("src", src_network, src_ip, src_port)?,
-            destination_filter: build_filter_spec("dst", dst_network, dst_ip, dst_port)?,
-            connection_states: states,
-            ip_version,
+        let mut filters = PolicyFilterInput::from_cli(
+            src_network,
+            src_ip,
+            src_port,
+            dst_network,
+            dst_ip,
+            dst_port,
             src_port_group,
             dst_port_group,
             src_address_group,
             dst_address_group,
+        )?;
+        resolve_policy_group_refs(controller, &mut filters).await?;
+        let (source_filter, destination_filter) = filters.into_filters();
+        UpdateFirewallPolicyRequest {
+            allow_return_traffic,
+            source_filter,
+            destination_filter,
+            connection_states: states,
+            ip_version,
             ..UpdateFirewallPolicyRequest::default()
         }
     };
-
-    // Resolve group references (from CLI flags). The from-file path resolves
-    // and consumes its own group fields above; this catches CLI-flag inputs.
-    if update.src_port_group.is_some()
-        || update.dst_port_group.is_some()
-        || update.src_address_group.is_some()
-        || update.dst_address_group.is_some()
-    {
-        util::ensure_session_access(controller, "firewall policy with group references").await?;
-        resolve_group_refs_update(controller, &mut update)?;
-    }
 
     // Mirror the create-side validation: `allow_return_traffic` only
     // applies to Allow actions. We can only enforce this when the update
