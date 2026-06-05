@@ -2,7 +2,7 @@
 
 use ratatui::style::Color;
 
-use super::time_series::{Baseline, FillStyle, SeriesData, SeriesDirection, XAxis};
+use super::model::{Baseline, FillStyle, SeriesData, SeriesDirection, XAxis};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlotBounds {
@@ -110,7 +110,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::tui::widgets::hyperchart::time_series::ChartPoint;
+    use crate::tui::widgets::hyperchart::model::ChartPoint;
 
     #[test]
     fn scene_empty_tracks_gap_only_series() {

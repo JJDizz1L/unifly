@@ -5,8 +5,8 @@ use ratatui::style::Color;
 
 use super::axis;
 use super::color::color_to_rgb;
+use super::model::FillStyle;
 use super::scene::{AnnotationKind, ChartScene, PlotBounds, SceneSeries};
-use super::time_series::FillStyle;
 use crate::tui::render_caps::{ColorDepth, GlyphTier, GraphicsProtocol, RenderCaps};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,10 +281,10 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::tui::widgets::hyperchart::scene::{Annotation, GridSpec};
-    use crate::tui::widgets::hyperchart::time_series::{
+    use crate::tui::widgets::hyperchart::model::{
         Baseline, FillStyle, SeriesData, SeriesDirection, XAxis,
     };
+    use crate::tui::widgets::hyperchart::scene::{Annotation, GridSpec};
 
     #[test]
     fn rasterizer_draws_non_empty_scene() {
