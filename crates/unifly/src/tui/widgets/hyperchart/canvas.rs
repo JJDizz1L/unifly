@@ -39,9 +39,7 @@ pub(super) fn render(chart: &HyperChart<'_>, area: Rect, buf: &mut Buffer, gutte
     render_y_gutter(chart, gutter_area, plot_area, &scene, buf);
 
     #[cfg(feature = "tui-graphics")]
-    if caps.graphics_protocol.is_pixels()
-        && super::time_series::render_graphics_scene(&scene, plot_area, buf)
-    {
+    if caps.graphics_protocol.is_pixels() && super::pixel::render_scene(&scene, plot_area, buf) {
         annotations::render(chart, &scene, plot_area, buf);
         if let Some(axis_area) = x_axis_area {
             render_x_axis(chart.x_axis_kind(), axis_area, plot_area, bounds, buf);
