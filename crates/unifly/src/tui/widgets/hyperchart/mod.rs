@@ -19,6 +19,8 @@ pub mod bars;
 pub mod block;
 mod canvas;
 pub mod color;
+#[cfg(feature = "tui-graphics")]
+mod curve;
 pub mod empty;
 pub mod faceplate;
 mod geometry;
