@@ -47,6 +47,14 @@ pub(super) fn render(chart: &HyperChart<'_>, area: Rect, buf: &mut Buffer, gutte
         return;
     }
 
+    if super::subcell::render(&scene, plot_area, buf, caps) {
+        annotations::render(chart, &scene, plot_area, buf);
+        if let Some(axis_area) = x_axis_area {
+            render_x_axis(chart.x_axis_kind(), axis_area, plot_area, bounds, buf);
+        }
+        return;
+    }
+
     let plot_density = (usize::from(plot_area.width.max(1)) * 4).max(160);
     let paths: Vec<Vec<Vec<(f64, f64)>>> = scene
         .series

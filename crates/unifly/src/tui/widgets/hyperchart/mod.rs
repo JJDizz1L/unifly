@@ -29,6 +29,7 @@ mod pixel;
 #[cfg(feature = "tui-graphics")]
 pub mod raster;
 pub mod scene;
+mod subcell;
 mod tiled;
 pub mod time_series;
 
