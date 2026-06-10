@@ -1,13 +1,21 @@
-//! Pixel rasterizer for optional graphics-protocol chart rendering.
+//! tiny-skia rasterizer for graphics-protocol chart rendering.
+//!
+//! Renders a [`ChartScene`] into an RGBA image with anti-aliased strokes,
+//! monotone cubic interpolation between samples, vertical gradient fills
+//! that fade toward the baseline, and a glow understroke beneath a crisp
+//! core line. Sample runs denser than the pixel grid are reduced with M4
+//! (first/min/max/last per column) so traffic spikes never alias away.
 
-use image::{Rgba, RgbaImage};
+use image::RgbaImage;
 use ratatui::style::Color;
+use tiny_skia::{
+    FillRule, GradientStop, LineCap, LineJoin, LinearGradient, Paint, Path, PathBuilder, Pixmap,
+    Point, SpreadMode, Stroke, Transform,
+};
 
-use super::axis;
 use super::color::color_to_rgb;
-use super::model::FillStyle;
+use super::model::{FillStyle, SeriesDirection};
 use super::scene::{AnnotationKind, ChartScene, PlotBounds, SceneSeries};
-use crate::tui::render_caps::{ColorDepth, GlyphTier, GraphicsProtocol, RenderCaps};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RasterSize {
@@ -15,265 +23,410 @@ pub struct RasterSize {
     pub height: u32,
 }
 
+const FILL_ALPHA_AT_LINE: u8 = 148;
+const FILL_ALPHA_AT_BASELINE: u8 = 10;
+const GLOW_ALPHA: u8 = 54;
+const CORE_ALPHA: u8 = 242;
+const GRID_ALPHA: u8 = 40;
+const BASELINE_ALPHA: u8 = 84;
+
+/// Average sample spacing in pixels above which the curve is splined.
+/// Denser data is already smooth at pixel scale and splining duplicate-x
+/// M4 output would be wasted work.
+const SPLINE_MIN_SPACING: f32 = 3.0;
+
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    bounds: PlotBounds,
+    width: u32,
+    height: u32,
+}
+
+impl Frame {
+    #[allow(clippy::cast_possible_truncation, clippy::as_conversions)]
+    fn x_px(self, x: f64) -> f32 {
+        let span = (self.bounds.x_max - self.bounds.x_min).max(f64::EPSILON);
+        let ratio = ((x - self.bounds.x_min) / span).clamp(0.0, 1.0);
+        (ratio * f64::from(self.width.saturating_sub(1))) as f32
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::as_conversions)]
+    fn y_px(self, y: f64) -> f32 {
+        let span = (self.bounds.y_max - self.bounds.y_min).max(f64::EPSILON);
+        let ratio = ((self.bounds.y_max - y) / span).clamp(0.0, 1.0);
+        (ratio * f64::from(self.height.saturating_sub(1))) as f32
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    fn core_width(self) -> f32 {
+        (self.height as f32 / 110.0).clamp(1.4, 2.6)
+    }
+
+    fn glow_width(self) -> f32 {
+        self.core_width() * 3.2
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    fn right_edge(self) -> f32 {
+        self.width.saturating_sub(1) as f32
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    fn bottom_edge(self) -> f32 {
+        self.height.saturating_sub(1) as f32
+    }
+}
+
 pub fn rasterize_scene(scene: &ChartScene<'_>, size: RasterSize) -> RgbaImage {
-    let mut image = RgbaImage::from_pixel(size.width.max(1), size.height.max(1), transparent());
-
-    draw_grid(&mut image, scene, size);
-    for series in &scene.series {
-        draw_series_fill(&mut image, scene, series, size);
-    }
-    for series in &scene.series {
-        draw_series_line(&mut image, scene, series, size);
-    }
-    draw_annotations(&mut image, scene, size);
-
-    image
-}
-
-fn draw_grid(image: &mut RgbaImage, scene: &ChartScene<'_>, size: RasterSize) {
-    let grid = rgba(Color::DarkGray, 80);
-    for y in scene.gridlines() {
-        draw_horizontal(image, y_to_pixel(size, scene.bounds, y), grid);
-    }
-    draw_horizontal(
-        image,
-        y_to_pixel(size, scene.bounds, 0.0),
-        rgba(Color::Gray, 120),
-    );
-}
-
-fn draw_series_fill(
-    image: &mut RgbaImage,
-    scene: &ChartScene<'_>,
-    series: &SceneSeries<'_>,
-    size: RasterSize,
-) {
-    let Some(bands) = fill_bands(series.fill, size.height) else {
-        return;
+    let width = size.width.max(1);
+    let height = size.height.max(1);
+    let Some(mut pixmap) = Pixmap::new(width, height) else {
+        return RgbaImage::new(width, height);
     };
-    let density = usize::try_from(size.width.max(1)).unwrap_or(usize::MAX);
-    for segment in series.data.visible_segments() {
-        for (x, y) in axis::interpolate_fill(&segment, density) {
-            let transformed_y = scene.transform_y(series, y);
-            draw_fill_column(image, size, scene.bounds, x, transformed_y, &bands);
-        }
+    let frame = Frame {
+        bounds: scene.bounds,
+        width,
+        height,
+    };
+
+    draw_grid(&mut pixmap, scene, frame);
+    for series in &scene.series {
+        draw_series(&mut pixmap, scene, series, frame);
+    }
+    draw_annotations(&mut pixmap, scene, frame);
+
+    to_rgba_image(&pixmap)
+}
+
+fn draw_grid(pixmap: &mut Pixmap, scene: &ChartScene<'_>, frame: Frame) {
+    let mut builder = PathBuilder::new();
+    for y in scene.gridlines() {
+        let row = frame.y_px(y);
+        builder.move_to(0.0, row);
+        builder.line_to(frame.right_edge(), row);
+    }
+    if let Some(path) = builder.finish() {
+        stroke_path(pixmap, &path, Color::DarkGray, GRID_ALPHA, 1.0);
+    }
+
+    let baseline = frame.y_px(0.0);
+    let mut builder = PathBuilder::new();
+    builder.move_to(0.0, baseline);
+    builder.line_to(frame.right_edge(), baseline);
+    if let Some(path) = builder.finish() {
+        stroke_path(pixmap, &path, Color::Gray, BASELINE_ALPHA, 1.0);
     }
 }
 
-fn draw_series_line(
-    image: &mut RgbaImage,
+fn draw_series(
+    pixmap: &mut Pixmap,
     scene: &ChartScene<'_>,
     series: &SceneSeries<'_>,
-    size: RasterSize,
+    frame: Frame,
 ) {
-    let color = rgba(series.line_color, 245);
     for segment in series.data.visible_segments() {
-        let points = axis::interpolate_fill(&segment, usize::try_from(size.width).unwrap_or(1));
-        for pair in points.windows(2) {
-            let [(x1, y1), (x2, y2)] = pair else {
-                continue;
-            };
-            draw_line(
-                image,
-                (
-                    x_to_pixel(size, scene.bounds, *x1),
-                    y_to_pixel(size, scene.bounds, scene.transform_y(series, *y1)),
-                ),
-                (
-                    x_to_pixel(size, scene.bounds, *x2),
-                    y_to_pixel(size, scene.bounds, scene.transform_y(series, *y2)),
-                ),
-                color,
+        let points = pixel_points(scene, series, &segment, frame);
+        if points.len() < 2 {
+            continue;
+        }
+
+        if let Some(path) = fill_path(&points, frame)
+            && let Some(paint) = fill_paint(series.fill, series.direction, frame)
+        {
+            pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+
+        if let Some(path) = curve_path(&points) {
+            stroke_path(
+                pixmap,
+                &path,
+                series.line_color,
+                GLOW_ALPHA,
+                frame.glow_width(),
+            );
+            stroke_path(
+                pixmap,
+                &path,
+                series.line_color,
+                CORE_ALPHA,
+                frame.core_width(),
             );
         }
     }
 }
 
-fn draw_annotations(image: &mut RgbaImage, scene: &ChartScene<'_>, size: RasterSize) {
+fn draw_annotations(pixmap: &mut Pixmap, scene: &ChartScene<'_>, frame: Frame) {
     for annotation in &scene.annotations {
-        let x = x_to_pixel(size, scene.bounds, annotation.x);
-        let y = y_to_pixel(size, scene.bounds, annotation.transformed_y);
-        let color = rgba(annotation.color, 255);
+        let x = frame.x_px(annotation.x);
+        let y = frame.y_px(annotation.transformed_y);
+        let radius = frame.core_width() * 1.6;
         match annotation.kind {
-            AnnotationKind::Now => draw_disc(image, x, y, 3, color),
-            AnnotationKind::Peak => draw_diamond(image, x, y, 4, color),
-        }
-    }
-}
-
-fn draw_fill_column(
-    image: &mut RgbaImage,
-    size: RasterSize,
-    bounds: PlotBounds,
-    x: f64,
-    y: f64,
-    bands: &[Color],
-) {
-    if y.abs() < f64::EPSILON {
-        return;
-    }
-
-    let x = x_to_pixel(size, bounds, x);
-    let baseline = y_to_pixel(size, bounds, 0.0);
-    let value = y_to_pixel(size, bounds, y);
-    let start = baseline.min(value);
-    let end = baseline.max(value);
-    let span = end.saturating_sub(start).max(1);
-
-    for row in start..=end {
-        let distance = row.abs_diff(baseline);
-        let band = band_at(bands, distance, span);
-        blend_pixel(image, x, row, rgba(band, 130));
-    }
-}
-
-fn fill_bands(fill: FillStyle, height: u32) -> Option<Vec<Color>> {
-    let caps = RenderCaps {
-        color_depth: ColorDepth::TrueColor,
-        glyph_tier: GlyphTier::Braille,
-        graphics_protocol: GraphicsProtocol::None,
-    };
-    match fill {
-        FillStyle::None => None,
-        FillStyle::Solid(color) => Some(vec![color]),
-        FillStyle::Gradient(gradient) => {
-            Some(gradient.bands(caps, usize::try_from(height.max(2)).unwrap_or(usize::MAX)))
-        }
-    }
-}
-
-fn band_at(bands: &[Color], distance: u32, span: u32) -> Color {
-    let last = bands.len().saturating_sub(1);
-    if last == 0 {
-        return bands[0];
-    }
-
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss,
-        clippy::as_conversions
-    )]
-    let index = ((f64::from(distance) / f64::from(span)) * last as f64).round() as usize;
-    bands[index.min(last)]
-}
-
-fn draw_horizontal(image: &mut RgbaImage, y: u32, color: Rgba<u8>) {
-    for x in 0..image.width() {
-        blend_pixel(image, x, y, color);
-    }
-}
-
-fn draw_line(image: &mut RgbaImage, start: (u32, u32), end: (u32, u32), color: Rgba<u8>) {
-    let (mut x0, mut y0) = (i64::from(start.0), i64::from(start.1));
-    let (x1, y1) = (i64::from(end.0), i64::from(end.1));
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        draw_disc_i64(image, x0, y0, 1, color);
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-        let doubled = err.saturating_mul(2);
-        if doubled >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if doubled <= dx {
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
-
-fn draw_disc(image: &mut RgbaImage, x: u32, y: u32, radius: i64, color: Rgba<u8>) {
-    draw_disc_i64(image, i64::from(x), i64::from(y), radius, color);
-}
-
-fn draw_disc_i64(image: &mut RgbaImage, cx: i64, cy: i64, radius: i64, color: Rgba<u8>) {
-    for y in -radius..=radius {
-        for x in -radius..=radius {
-            if x.saturating_mul(x) + y.saturating_mul(y) <= radius.saturating_mul(radius) {
-                blend_pixel_i64(image, cx + x, cy + y, color);
+            AnnotationKind::Now => {
+                if let Some(halo) = PathBuilder::from_circle(x, y, radius * 2.4) {
+                    fill_solid(pixmap, &halo, annotation.color, GLOW_ALPHA);
+                }
+                if let Some(disc) = PathBuilder::from_circle(x, y, radius) {
+                    fill_solid(pixmap, &disc, annotation.color, 255);
+                }
+            }
+            AnnotationKind::Peak => {
+                let reach = radius * 1.8;
+                let mut builder = PathBuilder::new();
+                builder.move_to(x, y - reach);
+                builder.line_to(x + reach, y);
+                builder.line_to(x, y + reach);
+                builder.line_to(x - reach, y);
+                builder.close();
+                if let Some(diamond) = builder.finish() {
+                    fill_solid(pixmap, &diamond, annotation.color, 230);
+                }
             }
         }
     }
 }
 
-fn draw_diamond(image: &mut RgbaImage, cx: u32, cy: u32, radius: i64, color: Rgba<u8>) {
-    let (cx, cy) = (i64::from(cx), i64::from(cy));
-    for y in -radius..=radius {
-        for x in -radius..=radius {
-            if x.abs() + y.abs() <= radius {
-                blend_pixel_i64(image, cx + x, cy + y, color);
+/// Map a data segment into pixel space, reducing with M4 when the segment
+/// is denser than the pixel grid.
+fn pixel_points(
+    scene: &ChartScene<'_>,
+    series: &SceneSeries<'_>,
+    segment: &[(f64, f64)],
+    frame: Frame,
+) -> Vec<(f32, f32)> {
+    let points: Vec<(f32, f32)> = segment
+        .iter()
+        .map(|&(x, y)| (frame.x_px(x), frame.y_px(scene.transform_y(series, y))))
+        .collect();
+    downsample_m4(points, frame.width)
+}
+
+/// M4 reduction: keep first, vertical extremes, and last sample per pixel
+/// column so peaks survive any data-to-pixel density ratio.
+fn downsample_m4(points: Vec<(f32, f32)>, width: u32) -> Vec<(f32, f32)> {
+    let budget = usize::try_from(width)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(2);
+    if points.len() <= budget {
+        return points;
+    }
+
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(budget.saturating_mul(2));
+    let mut bucket: Option<(i64, [(f32, f32); 4])> = None;
+
+    #[allow(clippy::cast_possible_truncation, clippy::as_conversions)]
+    let column_of = |x: f32| x.floor() as i64;
+
+    for point in points {
+        let column = column_of(point.0);
+        match bucket.as_mut() {
+            Some((current, [_, low, high, last])) if *current == column => {
+                if point.1 < low.1 {
+                    *low = point;
+                }
+                if point.1 > high.1 {
+                    *high = point;
+                }
+                *last = point;
             }
+            _ => {
+                if let Some((_, cells)) = bucket.take() {
+                    flush_bucket(&mut out, cells);
+                }
+                bucket = Some((column, [point; 4]));
+            }
+        }
+    }
+    if let Some((_, cells)) = bucket.take() {
+        flush_bucket(&mut out, cells);
+    }
+
+    out
+}
+
+fn flush_bucket(out: &mut Vec<(f32, f32)>, [first, low, high, last]: [(f32, f32); 4]) {
+    let mut ordered = [first, low, high, last];
+    ordered.sort_by(|left, right| left.0.total_cmp(&right.0));
+    for point in ordered {
+        if out.last() != Some(&point) {
+            out.push(point);
         }
     }
 }
 
-fn blend_pixel_i64(image: &mut RgbaImage, x: i64, y: i64, color: Rgba<u8>) {
-    let Ok(x) = u32::try_from(x) else {
-        return;
-    };
-    let Ok(y) = u32::try_from(y) else {
-        return;
-    };
-    blend_pixel(image, x, y, color);
+/// Build the stroked curve through the points: monotone cubic when samples
+/// are sparse enough to benefit, polyline otherwise.
+fn curve_path(points: &[(f32, f32)]) -> Option<Path> {
+    let mut builder = PathBuilder::new();
+    append_curve(&mut builder, points)?;
+    builder.finish()
 }
 
-fn blend_pixel(image: &mut RgbaImage, x: u32, y: u32, source: Rgba<u8>) {
-    if x >= image.width() || y >= image.height() {
-        return;
+/// Build the closed area between the curve and the baseline.
+fn fill_path(points: &[(f32, f32)], frame: Frame) -> Option<Path> {
+    let baseline = frame.y_px(0.0);
+    let first = points.first()?;
+    let last = points.last()?;
+    let mut builder = PathBuilder::new();
+    append_curve(&mut builder, points)?;
+    builder.line_to(last.0, baseline);
+    builder.line_to(first.0, baseline);
+    builder.close();
+    builder.finish()
+}
+
+fn append_curve(builder: &mut PathBuilder, points: &[(f32, f32)]) -> Option<()> {
+    let (&(first_x, first_y), rest) = points.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    builder.move_to(first_x, first_y);
+
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    let spacing = (points.last()?.0 - first_x) / (points.len() - 1) as f32;
+    if spacing >= SPLINE_MIN_SPACING {
+        let tangents = monotone_tangents(points);
+        for (window, tangent_pair) in points.windows(2).zip(tangents.windows(2)) {
+            let [(x0, y0), (x1, y1)] = [window[0], window[1]];
+            let step = (x1 - x0) / 3.0;
+            builder.cubic_to(
+                x0 + step,
+                tangent_pair[0].mul_add(step, y0),
+                x1 - step,
+                (-tangent_pair[1]).mul_add(step, y1),
+                x1,
+                y1,
+            );
+        }
+    } else {
+        for &(x, y) in rest {
+            builder.line_to(x, y);
+        }
+    }
+    Some(())
+}
+
+/// Fritsch-Carlson monotone tangents: flat at local extrema, secant-limited
+/// elsewhere, so the spline never overshoots the data.
+fn monotone_tangents(points: &[(f32, f32)]) -> Vec<f32> {
+    let count = points.len();
+    let secants: Vec<f32> = points
+        .windows(2)
+        .map(|pair| {
+            let [(x0, y0), (x1, y1)] = [pair[0], pair[1]];
+            (y1 - y0) / (x1 - x0).max(f32::EPSILON)
+        })
+        .collect();
+
+    let mut tangents = vec![0.0_f32; count];
+    if let (Some(first), Some(last)) = (secants.first(), secants.last()) {
+        tangents[0] = *first;
+        tangents[count - 1] = *last;
+    }
+    for index in 1..count.saturating_sub(1) {
+        let before = secants[index - 1];
+        let after = secants[index];
+        tangents[index] = if before * after <= 0.0 {
+            0.0
+        } else {
+            f32::midpoint(before, after)
+        };
     }
 
-    let alpha = u16::from(source[3]);
-    let inverse = 255u16.saturating_sub(alpha);
-    let target = image.get_pixel_mut(x, y);
-    for channel in 0..3 {
-        let value =
-            (u16::from(source[channel]) * alpha + u16::from(target[channel]) * inverse) / 255;
-        target[channel] = u8::try_from(value).unwrap_or(u8::MAX);
+    for (index, &secant) in secants.iter().enumerate() {
+        if secant.abs() < f32::EPSILON {
+            tangents[index] = 0.0;
+            tangents[index + 1] = 0.0;
+            continue;
+        }
+        let alpha = tangents[index] / secant;
+        let beta = tangents[index + 1] / secant;
+        let magnitude = alpha.mul_add(alpha, beta * beta);
+        if magnitude > 9.0 {
+            let scale = 3.0 / magnitude.sqrt();
+            tangents[index] = scale * alpha * secant;
+            tangents[index + 1] = scale * beta * secant;
+        }
     }
-    target[3] = target[3].saturating_add(source[3]);
+
+    tangents
 }
 
-fn transparent() -> Rgba<u8> {
-    Rgba([0, 0, 0, 0])
+fn fill_paint<'a>(fill: FillStyle, direction: SeriesDirection, frame: Frame) -> Option<Paint<'a>> {
+    let (base_color, line_color) = match fill {
+        FillStyle::None => return None,
+        FillStyle::Solid(color) => (color, color),
+        FillStyle::Gradient(gradient) => gradient.endpoints(),
+    };
+
+    let baseline = frame.y_px(0.0);
+    let extreme = match direction {
+        SeriesDirection::Up => 0.0,
+        SeriesDirection::Down => frame.bottom_edge(),
+    };
+
+    let shader = LinearGradient::new(
+        Point::from_xy(0.0, extreme),
+        Point::from_xy(0.0, baseline),
+        vec![
+            GradientStop::new(0.0, skia_color(line_color, FILL_ALPHA_AT_LINE)),
+            GradientStop::new(1.0, skia_color(base_color, FILL_ALPHA_AT_BASELINE)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    )
+    .unwrap_or_else(|| {
+        tiny_skia::Shader::SolidColor(skia_color(line_color, FILL_ALPHA_AT_LINE / 2))
+    });
+    Some(Paint {
+        shader,
+        anti_alias: true,
+        ..Paint::default()
+    })
 }
 
-fn rgba(color: Color, alpha: u8) -> Rgba<u8> {
+fn stroke_path(pixmap: &mut Pixmap, path: &Path, color: Color, alpha: u8, width: f32) {
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    paint.set_color(skia_color(color, alpha));
+    let stroke = Stroke {
+        width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    pixmap.stroke_path(path, &paint, &stroke, Transform::identity(), None);
+}
+
+fn fill_solid(pixmap: &mut Pixmap, path: &Path, color: Color, alpha: u8) {
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    paint.set_color(skia_color(color, alpha));
+    pixmap.fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+}
+
+fn skia_color(color: Color, alpha: u8) -> tiny_skia::Color {
     let (red, green, blue) = color_to_rgb(color);
-    Rgba([red, green, blue, alpha])
+    tiny_skia::Color::from_rgba8(red, green, blue, alpha)
 }
 
-fn x_to_pixel(size: RasterSize, bounds: PlotBounds, x: f64) -> u32 {
-    let span = (bounds.x_max - bounds.x_min).max(1.0);
-    let ratio = ((x - bounds.x_min) / span).clamp(0.0, 1.0);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::as_conversions
-    )]
-    {
-        (f64::from(size.width.saturating_sub(1)) * ratio).round() as u32
+fn to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
+    let mut data = Vec::with_capacity(pixmap.pixels().len() * 4);
+    for pixel in pixmap.pixels() {
+        let color = pixel.demultiply();
+        data.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
     }
-}
-
-fn y_to_pixel(size: RasterSize, bounds: PlotBounds, y: f64) -> u32 {
-    let span = (bounds.y_max - bounds.y_min).max(1.0);
-    let ratio = ((bounds.y_max - y) / span).clamp(0.0, 1.0);
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::as_conversions
-    )]
-    {
-        (f64::from(size.height.saturating_sub(1)) * ratio).round() as u32
-    }
+    RgbaImage::from_raw(pixmap.width(), pixmap.height(), data)
+        .unwrap_or_else(|| RgbaImage::new(pixmap.width(), pixmap.height()))
 }
 
 #[cfg(test)]
@@ -286,37 +439,46 @@ mod tests {
     };
     use crate::tui::widgets::hyperchart::scene::{Annotation, GridSpec};
 
-    #[test]
-    fn rasterizer_draws_non_empty_scene() {
-        let data = [(0.0, 1.0), (1.0, 3.0), (2.0, 2.0)];
-        let scene = ChartScene {
+    fn scene(series: Vec<SceneSeries<'_>>, y_max: f64, x_max: f64) -> ChartScene<'_> {
+        ChartScene {
             x_axis: XAxis::Hidden,
             bounds: PlotBounds {
                 x_min: 0.0,
-                x_max: 2.0,
+                x_max,
                 y_min: 0.0,
-                y_max: 4.0,
+                y_max,
             },
-            baseline: Baseline::Zero { y_max: 4.0 },
-            series: vec![SceneSeries {
+            baseline: Baseline::Zero { y_max },
+            series,
+            grid: GridSpec { tick_count: 4 },
+            annotations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rasterizer_draws_non_empty_scene() {
+        let data = [(0.0, 1.0), (1.0, 3.0), (2.0, 2.0)];
+        let mut chart_scene = scene(
+            vec![SceneSeries {
                 name: "rx",
                 data: SeriesData::Dense(&data),
                 line_color: Color::Cyan,
                 fill: FillStyle::Solid(Color::Blue),
                 direction: SeriesDirection::Up,
             }],
-            grid: GridSpec { tick_count: 4 },
-            annotations: vec![Annotation {
-                kind: AnnotationKind::Now,
-                x: 2.0,
-                y: 2.0,
-                transformed_y: 2.0,
-                color: Color::Cyan,
-            }],
-        };
+            4.0,
+            2.0,
+        );
+        chart_scene.annotations = vec![Annotation {
+            kind: AnnotationKind::Now,
+            x: 2.0,
+            y: 2.0,
+            transformed_y: 2.0,
+            color: Color::Cyan,
+        }];
 
         let image = rasterize_scene(
-            &scene,
+            &chart_scene,
             RasterSize {
                 width: 80,
                 height: 32,
@@ -324,5 +486,100 @@ mod tests {
         );
 
         assert!(image.pixels().any(|pixel| pixel[3] > 0));
+    }
+
+    #[test]
+    fn fill_fades_toward_baseline() {
+        let data = [(0.0, 2.0), (10.0, 2.0)];
+        let chart_scene = scene(
+            vec![SceneSeries {
+                name: "rx",
+                data: SeriesData::Dense(&data),
+                line_color: Color::Cyan,
+                fill: FillStyle::Gradient(super::super::ChartGradient::new(
+                    Color::Black,
+                    Color::Blue,
+                )),
+                direction: SeriesDirection::Up,
+            }],
+            4.0,
+            10.0,
+        );
+
+        let image = rasterize_scene(
+            &chart_scene,
+            RasterSize {
+                width: 40,
+                height: 40,
+            },
+        );
+
+        // Line sits at row ~19 of 40. Sample below the glow reach and just
+        // above the baseline: the fill must fade on the way down.
+        let near_line = image.get_pixel(20, 27)[3];
+        let near_baseline = image.get_pixel(20, 37)[3];
+        assert!(near_line > near_baseline, "{near_line} <= {near_baseline}");
+        assert!(near_baseline > 0);
+    }
+
+    #[test]
+    fn stroke_lands_on_the_line_row() {
+        let data = [(0.0, 2.0), (10.0, 2.0)];
+        let chart_scene = scene(
+            vec![SceneSeries {
+                name: "rx",
+                data: SeriesData::Dense(&data),
+                line_color: Color::Cyan,
+                fill: FillStyle::None,
+                direction: SeriesDirection::Up,
+            }],
+            4.0,
+            10.0,
+        );
+
+        let image = rasterize_scene(
+            &chart_scene,
+            RasterSize {
+                width: 40,
+                height: 40,
+            },
+        );
+
+        let on_line = image.get_pixel(20, 19)[3].max(image.get_pixel(20, 20)[3]);
+        let far_away = image.get_pixel(20, 5)[3];
+        assert!(on_line > 150, "core stroke missing: alpha {on_line}");
+        assert_eq!(far_away, 0, "stray paint far from the line");
+    }
+
+    #[test]
+    fn monotone_tangents_flatten_local_extrema() {
+        let points = [(0.0, 0.0), (10.0, 4.0), (20.0, 0.0)];
+        let tangents = monotone_tangents(&points);
+
+        assert!(tangents[1].abs() < f32::EPSILON, "peak must be flat");
+        assert!(tangents[0] > 0.0);
+        assert!(tangents[2] < 0.0);
+    }
+
+    #[test]
+    fn m4_downsampling_preserves_spikes() {
+        let mut points: Vec<(f32, f32)> = (0..1_000)
+            .map(|index| {
+                #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+                let x = index as f32 / 50.0;
+                (x, 5.0)
+            })
+            .collect();
+        points[500].1 = 95.0;
+
+        let reduced = downsample_m4(points, 20);
+
+        assert!(reduced.len() < 200);
+        assert!(
+            reduced
+                .iter()
+                .any(|&(_, y)| (y - 95.0).abs() < f32::EPSILON),
+            "spike lost in reduction"
+        );
     }
 }

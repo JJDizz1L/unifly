@@ -55,6 +55,7 @@ tui-graphics = [
     "dep:image",
     "dep:flate2",
     "dep:ratatui-image",
+    "dep:tiny-skia",
 ]
 e2e = []
 
@@ -118,6 +119,7 @@ bytesize           = { workspace = true, optional = true }
 humantime          = { workspace = true, optional = true }
 image              = { workspace = true, optional = true }
 flate2             = { workspace = true, optional = true }
+tiny-skia          = { workspace = true, optional = true }
 indexmap            = { workspace = true, optional = true }
 futures            = { workspace = true, optional = true }
 tokio-util         = { workspace = true, optional = true }
