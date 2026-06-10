@@ -86,7 +86,7 @@ impl RenderCaps {
             .as_deref()
             .and_then(parse_glyph_tier)
             .or_else(|| configured_quality.and_then(parse_glyph_tier))
-            .unwrap_or(GlyphTier::Octant);
+            .unwrap_or_else(|| default_glyph_tier(&env));
 
         Self {
             color_depth,
@@ -192,6 +192,48 @@ where
     env("UNIFLY_GRAPHICS_PROTOCOL").and_then(|value| parse_graphics_protocol(&value))
 }
 
+/// Octant glyphs live in the Unicode 16 Symbols for Legacy Computing
+/// Supplement, which most installed fonts do not cover. Default to Octant
+/// only on terminals that rasterize block glyphs internally instead of
+/// relying on the font; everything else gets Braille, which has been safe
+/// since long before Unicode 16.
+fn default_glyph_tier<F>(env: &F) -> GlyphTier
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if octant_capable_terminal(env) {
+        GlyphTier::Octant
+    } else {
+        GlyphTier::Braille
+    }
+}
+
+fn octant_capable_terminal<F>(env: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if env("KITTY_WINDOW_ID").is_some()
+        || env("GHOSTTY_RESOURCES_DIR").is_some()
+        || env("WEZTERM_EXECUTABLE").is_some()
+    {
+        return true;
+    }
+
+    if env("TERM").as_deref().is_some_and(|term| {
+        term.contains("kitty")
+            || term.contains("ghostty")
+            || term.contains("wezterm")
+            || term.contains("foot")
+    }) {
+        return true;
+    }
+
+    env("TERM_PROGRAM").is_some_and(|program| {
+        let program = program.to_ascii_lowercase();
+        program.contains("kitty") || program.contains("ghostty") || program.contains("wezterm")
+    })
+}
+
 fn parse_glyph_tier(value: &str) -> Option<GlyphTier> {
     match value.trim().to_ascii_lowercase().as_str() {
         "block" | "blocks" | "minimal" => Some(GlyphTier::Block),
@@ -248,10 +290,30 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_octant_charts() {
+    fn defaults_to_braille_on_unknown_terminals() {
         let caps = RenderCaps::detect_with(None, env(&[]));
 
         assert_eq!(caps.color_depth, ColorDepth::Ansi16);
+        assert_eq!(caps.glyph_tier, GlyphTier::Braille);
+    }
+
+    #[test]
+    fn octant_capable_terminals_default_to_octant() {
+        for vars in [
+            [("TERM", "xterm-ghostty")].as_slice(),
+            [("KITTY_WINDOW_ID", "1")].as_slice(),
+            [("TERM_PROGRAM", "WezTerm")].as_slice(),
+            [("TERM", "foot-extra")].as_slice(),
+        ] {
+            let caps = RenderCaps::detect_with(None, env(vars));
+            assert_eq!(caps.glyph_tier, GlyphTier::Octant, "vars: {vars:?}");
+        }
+    }
+
+    #[test]
+    fn config_quality_overrides_terminal_gating() {
+        let caps = RenderCaps::detect_with(Some("octant"), env(&[("TERM", "xterm-256color")]));
+
         assert_eq!(caps.glyph_tier, GlyphTier::Octant);
     }
 
